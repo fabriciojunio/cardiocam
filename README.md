@@ -182,6 +182,12 @@ Três testes existem para provar que o sistema sabe dizer "não sei", que é o
 requisito mais importante de um medidor: parede lisa filmada, imagem saturada
 em 255 e vídeo mais curto que a janela não podem produzir nenhum valor.
 
+A cobertura é de 87%. O que fica de fora é quase todo o código que só executa
+com hardware presente: abrir a webcam (49%) e o laço da janela gráfica (32%).
+São as duas fronteiras com o sistema operacional, e testá-las exigiria câmera
+física e servidor gráfico na integração contínua. O núcleo de sinais e de visão
+fica entre 88% e 100%.
+
 ## Privacidade
 
 Medição de sinal fisiológico é dado pessoal sensível segundo a LGPD. O projeto
