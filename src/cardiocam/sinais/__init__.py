@@ -17,6 +17,11 @@ from cardiocam.sinais.filtros import (
     resposta_em_frequencia,
 )
 from cardiocam.sinais.janela import JanelaDeslizante
+from cardiocam.sinais.rectificacao import (
+    energia_removida,
+    montar_atrasos,
+    remover_referencia,
+)
 from cardiocam.sinais.picos import (
     bpm_por_picos,
     detectar_picos,
@@ -41,8 +46,11 @@ __all__ = [
     "aplicar_passa_faixa",
     "bpm_por_picos",
     "detectar_picos",
+    "energia_removida",
     "estimar_fps",
     "filtrar_intervalos",
+    "montar_atrasos",
+    "remover_referencia",
     "intervalos_entre_batimentos",
     "media_movel",
     "normalizar",

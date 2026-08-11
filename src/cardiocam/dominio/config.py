@@ -40,6 +40,14 @@ class ConfiguracaoAnalise:
 
     algoritmo: str = "pos"
 
+    usar_fundo: bool = True
+    """Remove do sinal do rosto a parte explicável pela variação do fundo.
+
+    Cobre o que a projeção cromática não cobre. CHROM e POS cancelam variação de
+    intensidade comum aos três canais, mas o balanço de branco automático aplica
+    ganho diferente por canal e escapa dessa projeção. Como o fundo não tem
+    pulso, ele mede a perturbação diretamente."""
+
     def amostras_por_janela(self, fps: float) -> int:
         return max(2, int(round(self.janela_s * fps)))
 

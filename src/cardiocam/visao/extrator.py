@@ -15,6 +15,7 @@ import numpy as np
 
 from cardiocam.dominio.erros import RegiaoInvalida
 from cardiocam.dominio.resultado import Falha, Ok, Resultado
+from cardiocam.visao.fundo import media_do_fundo
 from cardiocam.visao.geometria import Retangulo
 from cardiocam.visao.pele import mascara_pele
 from cardiocam.visao.roi import RegiaoInteresse, regioes_de
@@ -32,6 +33,8 @@ class AmostraQuadro:
     pixels_usados: int
     proporcao_pele: float
     regioes: tuple[Retangulo, ...] = ()
+    fundo: tuple[float, float, float] | None = None
+    """Média RGB do fundo neste quadro, quando houve fundo utilizável."""
 
     def como_vetor(self) -> np.ndarray:
         return np.array([self.vermelho, self.verde, self.azul], dtype=float)
@@ -46,6 +49,7 @@ class ExtratorRGB:
         usar_mascara_pele: bool = True,
         percentil_descarte: float = 5.0,
         pixels_minimos: int = PIXELS_MINIMOS,
+        medir_fundo: bool = True,
     ) -> None:
         """
         `percentil_descarte` corta os pixels mais claros e mais escuros de cada
@@ -58,6 +62,7 @@ class ExtratorRGB:
         self.usar_mascara_pele = usar_mascara_pele
         self.percentil_descarte = percentil_descarte
         self.pixels_minimos = pixels_minimos
+        self.medir_fundo = medir_fundo
 
     def _selecionar_pixels(self, recorte: np.ndarray) -> np.ndarray:
         """Devolve os pixels válidos do recorte, no formato Nx3 (B, G, R).
@@ -141,6 +146,7 @@ class ExtratorRGB:
             )
 
         azul, verde, vermelho = pixels.mean(axis=0)
+        fundo = media_do_fundo(quadro, caixa_rosto) if self.medir_fundo else None
         return Ok(
             AmostraQuadro(
                 vermelho=float(vermelho),
@@ -149,5 +155,6 @@ class ExtratorRGB:
                 pixels_usados=int(pixels.shape[0]),
                 proporcao_pele=float(pixels_pele / area_total) if area_total else 0.0,
                 regioes=tuple(regioes),
+                fundo=fundo,
             )
         )

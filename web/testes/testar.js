@@ -18,10 +18,11 @@ import {
   proximaPotenciaDeDois,
   refinarPico,
   relacaoSinalRuido,
+  removerReferencia,
 } from '../js/dsp.js';
 import { extrairPulso } from '../js/rppg.js';
 import { classificarPele } from '../js/pele.js';
-import { Medidor } from '../js/medidor.js';
+import { Medidor, rectificarPeloFundo } from '../js/medidor.js';
 import {
   GANHO_CANAL,
   gerarSerieRGB,
@@ -334,6 +335,112 @@ for (const algoritmo of ['pos', 'chrom']) {
   // último instante, que é o que a janela exige.
   for (let i = 1; i <= 300; i++) medidor.processarQuadro(ctx, 320, 240, i / 30);
   verificar('progresso chega a um', medidor.progresso === 1, `obtido ${medidor.progresso}`);
+}
+
+// ---------------------------------------------------------------------------
+grupo('Rectificação por referência de fundo');
+
+for (const ganho of [0.5, 1, 2, 4]) {
+  const interferencia = senoide(120, 30, 20);
+  const limpo = removerReferencia(interferencia.map((x) => x * ganho), interferencia);
+  verificar(
+    `interferência pura removida com ganho ${ganho}`,
+    desvioPadrao(limpo) < 0.2 * desvioPadrao(interferencia.map((x) => x * ganho)),
+  );
+}
+
+for (const bpm of [60, 78, 96]) {
+  for (const forca of [1, 2, 4]) {
+    const pulso = senoide(bpm, 30, 24);
+    const interferencia = senoide(bpm + 42, 30, 24);
+    const limpo = removerReferencia(
+      pulso.map((x, i) => x + forca * interferencia[i]),
+      interferencia,
+    );
+    const correlacao = (a, b) => {
+      const ma = media(a);
+      const mb = media(b);
+      let num = 0;
+      let da = 0;
+      let db = 0;
+      for (let i = 0; i < a.length; i++) {
+        num += (a[i] - ma) * (b[i] - mb);
+        da += (a[i] - ma) ** 2;
+        db += (b[i] - mb) ** 2;
+      }
+      return num / Math.sqrt(da * db);
+    };
+    verificar(
+      `pulso de ${bpm} bpm sobrevive à remoção (interferência ${forca}x)`,
+      correlacao(limpo, pulso) > 0.9,
+      `correlação ${correlacao(limpo, pulso).toFixed(3)}`,
+    );
+    verificar(
+      `interferência some com o pulso de ${bpm} bpm (${forca}x)`,
+      Math.abs(correlacao(limpo, interferencia)) < 0.2,
+    );
+  }
+}
+
+verificar(
+  'referência constante não altera o sinal',
+  removerReferencia(senoide(72, 30, 20), new Array(600).fill(1)).every(
+    (x, i) => Math.abs(x - senoide(72, 30, 20)[i]) < 1e-9,
+  ),
+);
+verificar(
+  'tamanhos incompatíveis devolvem a entrada',
+  removerReferencia(senoide(72, 30, 20), [1, 2, 3]).length === 600,
+);
+
+// O caso que motivou a rectificação: balanço de branco automático oscilando
+// dentro da banda cardíaca, com ganho diferente por canal. CHROM e POS não
+// cancelam isso porque não é variação pura de intensidade.
+{
+  let semFundo = 0;
+  let comFundo = 0;
+  let total = 0;
+
+  for (const bpm of [60, 72, 84, 96, 108]) {
+    const fps = 30;
+    const n = fps * 24;
+    const hz = bpm / 60;
+    let interfHz = hz + 0.7;
+    if (interfHz > 3.2) interfHz = hz - 0.7;
+
+    const aleatorio = geradorAleatorio(bpm);
+    const tempos = Array.from({ length: n }, (_, i) => i / fps);
+    const pulso = ondaDePulso(tempos, hz);
+    const osc = tempos.map((t) => Math.sin(2 * Math.PI * interfHz * t + 0.4));
+    const ganhos = { vermelho: 0.020, verde: 0.008, azul: 0.030 };
+    const base = { vermelho: 205, verde: 175, azul: 150 };
+
+    const rosto = {};
+    const fundo = {};
+    for (const c of ['vermelho', 'verde', 'azul']) {
+      rosto[c] = tempos.map(
+        (_, i) =>
+          base[c] * (1 + ganhos[c] * osc[i]) * (1 + 0.012 * GANHO_CANAL[c] * pulso[i]) +
+          ruidoNormal(aleatorio) * 0.05,
+      );
+      fundo[c] = tempos.map((_, i) => 120 * (1 + ganhos[c] * osc[i]) + ruidoNormal(aleatorio) * 0.05);
+    }
+
+    const semRect = estimarFrequencia(extrairPulso(rosto, fps, 'pos'), fps);
+    const comRect = estimarFrequencia(extrairPulso(rectificarPeloFundo(rosto, fundo), fps, 'pos'), fps);
+
+    total++;
+    if (Math.abs(semRect.bpm - bpm) < 3) semFundo++;
+    if (Math.abs(comRect.bpm - bpm) < 3) comFundo++;
+    proximo(`rectificação salva ${bpm} bpm sob balanço de branco oscilante`, comRect?.bpm, bpm, 3);
+  }
+
+  verificar(
+    'a rectificação é o que viabiliza esse cenário',
+    comFundo > semFundo,
+    `sem fundo ${semFundo}/${total}, com fundo ${comFundo}/${total}`,
+  );
+  process.stdout.write(`  (sem rectificação ${semFundo}/${total}, com rectificação ${comFundo}/${total})\n`);
 }
 
 // ---------------------------------------------------------------------------

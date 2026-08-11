@@ -31,6 +31,7 @@ class JanelaDeslizante:
         self._verde: deque[float] = deque(maxlen=capacidade)
         self._azul: deque[float] = deque(maxlen=capacidade)
         self._instantes: deque[float] = deque(maxlen=capacidade)
+        self._fundo: deque[tuple[float, float, float] | None] = deque(maxlen=capacidade)
 
         self._capacidade = capacidade
         self._passo = self.config.amostras_por_passo(fps_nominal)
@@ -52,12 +53,20 @@ class JanelaDeslizante:
     def cheia(self) -> bool:
         return len(self._verde) >= self._capacidade
 
-    def adicionar(self, vermelho: float, verde: float, azul: float, instante: float) -> None:
-        """Registra a média RGB de mais um quadro."""
+    def adicionar(
+        self,
+        vermelho: float,
+        verde: float,
+        azul: float,
+        instante: float,
+        fundo: tuple[float, float, float] | None = None,
+    ) -> None:
+        """Registra a média RGB de mais um quadro, e a do fundo quando houver."""
         self._vermelho.append(float(vermelho))
         self._verde.append(float(verde))
         self._azul.append(float(azul))
         self._instantes.append(float(instante))
+        self._fundo.append(fundo)
         self._desde_ultima_emissao += 1
         self._total_recebido += 1
 
@@ -76,6 +85,7 @@ class JanelaDeslizante:
         self._verde.clear()
         self._azul.clear()
         self._instantes.clear()
+        self._fundo.clear()
         self._desde_ultima_emissao = 0
 
     def fps_efetivo(self) -> float:
@@ -94,11 +104,28 @@ class JanelaDeslizante:
         verde = np.asarray(self._verde, dtype=float)
         azul = np.asarray(self._azul, dtype=float)
         instantes = np.asarray(self._instantes, dtype=float)
+        fundo = self._matriz_de_fundo()
 
         fps = self.fps_efetivo()
         if not uniformizar or len(verde) < 2:
-            return SerieRGB(vermelho, verde, azul, fps, instantes)
+            return SerieRGB(vermelho, verde, azul, fps, instantes, fundo)
 
         matriz = np.vstack([vermelho, verde, azul])
+        if fundo is not None:
+            matriz = np.vstack([matriz, fundo])
         reamostrado, grade = reamostrar_uniforme(matriz, instantes, fps)
-        return SerieRGB(reamostrado[0], reamostrado[1], reamostrado[2], fps, grade)
+        fundo_reamostrado = reamostrado[3:6] if fundo is not None else None
+        return SerieRGB(
+            reamostrado[0], reamostrado[1], reamostrado[2], fps, grade, fundo_reamostrado
+        )
+
+    def _matriz_de_fundo(self) -> np.ndarray | None:
+        """Fundo como matriz 3xN, ou None se algum quadro ficou sem medida.
+
+        Exigimos a série completa porque interpolar buracos na referência
+        introduziria justamente o tipo de artefato lento que ela deveria
+        remover.
+        """
+        if not self._fundo or any(f is None for f in self._fundo):
+            return None
+        return np.asarray(self._fundo, dtype=float).T

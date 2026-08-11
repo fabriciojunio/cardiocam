@@ -30,11 +30,30 @@ from cardiocam.dominio.sinal import SerieRGB, SinalPulso
 from cardiocam.rppg import AlgoritmoRPPG, criar_algoritmo
 from cardiocam.sinais import analisar as analisar_espectro
 from cardiocam.sinais import variabilidade
+from cardiocam.sinais.rectificacao import remover_referencia
 from cardiocam.sinais.janela import JanelaDeslizante
 from cardiocam.visao.detector_face import DetectorFace, DetectorHaar
 from cardiocam.visao.extrator import AmostraQuadro, ExtratorRGB
 from cardiocam.visao.geometria import Retangulo
 from cardiocam.visao.rastreador import RastreadorRosto
+
+
+def _rectificar_pelo_fundo(serie: SerieRGB) -> SerieRGB:
+    """Retira de cada canal do rosto a parte explicável pelo mesmo canal do fundo.
+
+    A média de cada canal é reposta depois da subtração, porque os algoritmos
+    cromáticos normalizam pela média temporal e precisam do nível original.
+    """
+    canais = serie.como_matriz()
+    limpos = np.empty_like(canais)
+    for indice in range(3):
+        media_original = float(np.mean(canais[indice]))
+        limpos[indice] = (
+            remover_referencia(canais[indice], serie.fundo[indice]) + media_original
+        )
+    return SerieRGB(
+        limpos[0], limpos[1], limpos[2], serie.fps, serie.instantes, serie.fundo
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +87,14 @@ def estimar_de_serie(
     """
     config = config or ConfiguracaoAnalise()
     algoritmo = algoritmo or criar_algoritmo(config.algoritmo)
+
+    # Rectificação por referência de fundo, aplicada canal a canal antes do
+    # algoritmo. A ordem importa: o balanço de branco automático age sobre cada
+    # canal separadamente, então é aí que a correção pertence. Depois do
+    # algoritmo já não há como desfazer, porque a combinação cromática mistura
+    # os canais.
+    if config.usar_fundo and serie.fundo is not None:
+        serie = _rectificar_pelo_fundo(serie)
 
     extracao = algoritmo.extrair(serie, config)
     if extracao.falhou:
@@ -231,7 +258,7 @@ class MonitorCardiaco:
         amostra = extracao.desempacotar()
         estado.amostra = amostra
         self.janela.adicionar(
-            amostra.vermelho, amostra.verde, amostra.azul, instante
+            amostra.vermelho, amostra.verde, amostra.azul, instante, amostra.fundo
         )
         estado.progresso = min(1.0, len(self.janela) / self.janela.capacidade)
 

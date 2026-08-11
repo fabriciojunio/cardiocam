@@ -244,6 +244,57 @@ reportava um valor arbitrário com confiança máxima. A correção foi rejeitar
 sinais cuja amplitude é numericamente indistinguível de zero em relação à escala
 da entrada.
 
+## 4.3 O que a medição real revelou
+
+Uma medição com webcam comum devolveu 73 bpm contra 89 de um relógio de pulso,
+com relação sinal-ruído de 1,2 dB. O sistema classificou a leitura como
+confiança baixa, ou seja, sinalizou corretamente que não confiava no próprio
+número, mas o valor exibido estava errado.
+
+A investigação levou aos controles automáticos da câmera, e a um buraco na
+fundamentação usada até então. A exposição automática compensa exatamente a
+variação que queremos medir: quando a pele escurece por causa do pulso, o ganho
+sobe e apaga parte do sinal. O balanço de branco automático é pior, porque
+ajusta cada canal de cor separadamente.
+
+Esse último ponto é o que importa teoricamente. CHROM e POS partem da hipótese
+de que a distorção é proporcional nos três canais, e é dessa hipótese que vem
+toda a robustez deles. Um ganho por canal viola a hipótese e passa direto pela
+projeção cromática. Ou seja, existia uma classe inteira de perturbação que
+nenhum dos algoritmos implementados cobria.
+
+A saída mais direta seria desligar os automatismos. Na câmera usada, todas as
+propriedades de exposição e balanço de branco leem -1.0 e toda escrita devolve
+falso, nos dois backends do Windows. A câmera não expõe esses controles, e não
+há o que fazer por software do lado da captura.
+
+A solução adotada usa o fundo do quadro como referência. A parede atrás da
+pessoa não tem pulso: tudo que oscila nela é iluminação ou ganho de câmera. Como
+rosto e fundo recebem a mesma luz, o fundo mede a perturbação diretamente, e o
+que for explicável por ele é removido do sinal do rosto por mínimos quadrados
+com alguns atrasos, canal a canal, antes do algoritmo rPPG.
+
+| Cenário com balanço de branco oscilando na banda cardíaca | Acertos em 3 bpm |
+| --- | ---: |
+| Sem rectificação | 1 de 16 |
+| Com rectificação | 16 de 16 |
+
+Duas tentativas anteriores foram descartadas por medição, e registrá-las importa
+tanto quanto registrar a que funcionou.
+
+A primeira foi pontuar cada candidata a pico somando a energia encontrada no
+dobro da frequência, na expectativa de que o pulso, por ter harmônico, vencesse
+artefatos senoidais. A medição mostrou que a ideia premia subharmônicos: uma
+interferência a 48 bpm recebe o bônus do próprio pulso a 96 bpm. Na faixa em que
+o sistema já acertava tudo, a taxa caiu de 100% para 75%. Descartada.
+
+A segunda foi uma trava que devolvia o sinal original quando a rectificação
+apagava quase tudo, pensada para proteger contra um fundo casualmente
+correlacionado com o pulso. O efeito colateral era pior que o problema: se o
+fundo explica todo o sinal do rosto, então não havia pulso ali, e devolver o
+original faria o sistema reportar a interferência como batimento. A trava foi
+retirada, e agora a verificação de sinal degenerado recusa a janela.
+
 ## 5. Limitações
 
 - Não é dispositivo médico e não serve para diagnóstico.

@@ -29,12 +29,15 @@ class FonteWebcam:
         altura: int = 480,
         fps_desejado: float = 30.0,
         espelhar: bool = True,
+        travar_automaticos: bool = True,
     ) -> None:
         self.indice = indice
         self.largura = largura
         self.altura = altura
         self.fps = fps_desejado
         self.espelhar = espelhar
+        self.travar_automaticos = travar_automaticos
+        self.ajustes_travados: dict[str, bool] = {}
         self.backend = "não aberto"
         self._captura: cv2.VideoCapture | None = None
         self._inicio: float | None = None
@@ -119,6 +122,37 @@ class FonteWebcam:
             )
         )
 
+    def travar_ajustes_automaticos(self, captura: cv2.VideoCapture) -> dict[str, bool]:
+        """Tenta desligar exposição e balanço de branco automáticos.
+
+        Este é o ajuste de câmera que mais afeta a qualidade da medição. Os dois
+        controles trabalham exatamente contra o que queremos medir: quando a
+        pele escurece por causa do pulso, a exposição automática compensa
+        clareando a imagem, apagando parte do sinal; e o balanço de branco
+        automático mexe no ganho de cada canal separadamente, criando uma
+        variação de cor que os métodos cromáticos não conseguem cancelar, já que
+        eles supõem distorção igual nos três canais.
+
+        A tentativa é feita com as duas convenções em uso, porque o valor que
+        significa "manual" muda entre backends: o DirectShow espera 0,25 e o
+        Media Foundation espera 0.
+
+        Muitas webcams simplesmente não expõem esses controles, e nesse caso
+        todas as chamadas falham. Não é erro: devolvemos o que foi possível
+        aplicar para que a interface possa avisar, e a rectificação por
+        referência de fundo continua cobrindo o caso.
+        """
+        aplicado = {"exposicao": False, "balanco_de_branco": False}
+
+        for valor in (0.25, 0.0, 1.0):
+            if captura.set(cv2.CAP_PROP_AUTO_EXPOSURE, valor):
+                aplicado["exposicao"] = True
+                break
+        if captura.set(cv2.CAP_PROP_AUTO_WB, 0):
+            aplicado["balanco_de_branco"] = True
+
+        return aplicado
+
     def _registrar(self, captura: cv2.VideoCapture, nome_backend: str) -> None:
         """Guarda a captura que funcionou e a taxa de quadros informada."""
         relatada = captura.get(cv2.CAP_PROP_FPS)
@@ -127,6 +161,9 @@ class FonteWebcam:
         self.largura = int(captura.get(cv2.CAP_PROP_FRAME_WIDTH)) or self.largura
         self.altura = int(captura.get(cv2.CAP_PROP_FRAME_HEIGHT)) or self.altura
         self.backend = nome_backend
+        self.ajustes_travados = (
+            self.travar_ajustes_automaticos(captura) if self.travar_automaticos else {}
+        )
         self._captura = captura
 
     def quadros(self) -> Iterator[Quadro]:

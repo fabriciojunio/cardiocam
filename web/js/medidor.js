@@ -12,8 +12,8 @@
  * fazendo o trabalho do estabilizador.
  */
 
-import { desvioPadrao, estimarFrequencia } from './dsp.js';
-import { mediaDaPele } from './pele.js';
+import { desvioPadrao, estimarFrequencia, media, removerReferencia } from './dsp.js';
+import { classificarPele, mediaDaPele } from './pele.js';
 import { extrairPulso } from './rppg.js';
 
 export const BANDA = { minHz: 0.75, maxHz: 3.3 };
@@ -49,15 +49,82 @@ export const REGIOES = REGIOES_NA_CAIXA.map((r) => ({
   altura: r.altura * CAIXA_ROSTO.altura,
 }));
 
+/**
+ * Faixas laterais usadas como referência de iluminação. Ficam fora da caixa do
+ * rosto, então não têm pulso: o que oscila nelas é a luz do ambiente ou o ganho
+ * da câmera se ajustando.
+ */
+export const REGIOES_FUNDO = [
+  { x: 0.0, y: 0.0, largura: 0.13, altura: 1.0 },
+  { x: 0.87, y: 0.0, largura: 0.13, altura: 1.0 },
+];
+
+/**
+ * Média RGB dos pixels de fundo, descartando qualquer coisa que pareça pele.
+ * Se um braço ou outra pessoa entrar na faixa lateral, esses pixels teriam
+ * pulso e contaminariam a referência.
+ */
+export function medirFundo(contexto, largura, altura, passo = 3) {
+  let somaR = 0;
+  let somaG = 0;
+  let somaB = 0;
+  let usados = 0;
+
+  for (const regiao of REGIOES_FUNDO) {
+    const rx = Math.round(regiao.x * largura);
+    const ry = Math.round(regiao.y * altura);
+    const rl = Math.max(1, Math.round(regiao.largura * largura));
+    const ra = Math.max(1, Math.round(regiao.altura * altura));
+    if (rx + rl > largura || ry + ra > altura) continue;
+
+    const dados = contexto.getImageData(rx, ry, rl, ra).data;
+    for (let y = 0; y < ra; y += passo) {
+      for (let x = 0; x < rl; x += passo) {
+        const i = (y * rl + x) * 4;
+        const r = dados[i];
+        const g = dados[i + 1];
+        const b = dados[i + 2];
+        if (classificarPele(r, g, b)) continue;
+        somaR += r;
+        somaG += g;
+        somaB += b;
+        usados++;
+      }
+    }
+  }
+
+  if (usados < 100) return null;
+  return { vermelho: somaR / usados, verde: somaG / usados, azul: somaB / usados };
+}
+
+/**
+ * Retira de cada canal do rosto a parte explicável pelo mesmo canal do fundo.
+ * A média original é reposta porque os algoritmos cromáticos normalizam pela
+ * média temporal e precisam do nível de partida.
+ */
+export function rectificarPeloFundo(serie, fundo) {
+  if (!fundo || !fundo.verde || fundo.verde.length !== serie.verde.length) return serie;
+  const limpar = (canal, referencia) => {
+    const m = media(canal);
+    return removerReferencia(canal, referencia).map((x) => x + m);
+  };
+  return {
+    vermelho: limpar(serie.vermelho, fundo.vermelho),
+    verde: limpar(serie.verde, fundo.verde),
+    azul: limpar(serie.azul, fundo.azul),
+  };
+}
+
 export class Medidor {
   /**
    * @param {object} opcoes
    * @param {number} opcoes.janelaS  segundos acumulados antes de estimar
    * @param {string} opcoes.algoritmo  pos, chrom ou verde
    */
-  constructor({ janelaS = 15, algoritmo = 'pos' } = {}) {
+  constructor({ janelaS = 15, algoritmo = 'pos', usarFundo = true } = {}) {
     this.janelaS = janelaS;
     this.algoritmo = algoritmo;
+    this.usarFundo = usarFundo;
     this.reiniciar();
   }
 
@@ -137,11 +204,13 @@ export class Medidor {
     }
 
     this.quadrosSemPele = 0;
+    const fundo = this.usarFundo ? medirFundo(contexto, largura, altura) : null;
     this.amostras.push({
       t: instanteS,
       r: somaR / pesoTotal,
       g: somaG / pesoTotal,
       b: somaB / pesoTotal,
+      fundo,
     });
 
     // Mantém só o necessário para a janela, com folga.
@@ -165,13 +234,24 @@ export class Medidor {
     if (this.progresso < 1 || this.amostras.length < 64) return null;
 
     const fps = this.fpsEfetivo;
-    const serie = {
+    let serie = {
       vermelho: this.amostras.map((a) => a.r),
       verde: this.amostras.map((a) => a.g),
       azul: this.amostras.map((a) => a.b),
     };
 
     if (desvioPadrao(serie.verde) < 1e-6) return null;
+
+    // A rectificação vem antes do algoritmo de propósito: o balanço de branco
+    // automático age sobre cada canal separadamente, então é aí que a correção
+    // pertence. Depois da combinação cromática já não há como desfazer.
+    if (this.usarFundo && this.amostras.every((a) => a.fundo)) {
+      serie = rectificarPeloFundo(serie, {
+        vermelho: this.amostras.map((a) => a.fundo.vermelho),
+        verde: this.amostras.map((a) => a.fundo.verde),
+        azul: this.amostras.map((a) => a.fundo.azul),
+      });
+    }
 
     const pulso = extrairPulso(serie, fps, this.algoritmo, BANDA.minHz, BANDA.maxHz);
     const resultado = estimarFrequencia(pulso, fps, BANDA.minHz, BANDA.maxHz);

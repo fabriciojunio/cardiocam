@@ -203,6 +203,38 @@ async function iniciarCamera() {
   el.video.srcObject = fluxo;
   el.video.muted = true;
   await el.video.play();
+  await travarAjustesAutomaticos();
+}
+
+/**
+ * Tenta fixar exposição e balanço de branco.
+ *
+ * É o ajuste de câmera que mais afeta a medição. Os dois controles trabalham
+ * contra o que queremos medir: quando a pele escurece por causa do pulso, a
+ * exposição automática clareia a imagem e apaga parte do sinal; e o balanço de
+ * branco automático mexe no ganho de cada canal separadamente, criando uma
+ * variação de cor que os métodos cromáticos não cancelam.
+ *
+ * Poucos navegadores expõem esses controles, e em desktop quase nenhum. Quando
+ * não dá, a rectificação por referência de fundo cobre boa parte do problema.
+ */
+async function travarAjustesAutomaticos() {
+  try {
+    const trilha = fluxo?.getVideoTracks?.()[0];
+    if (!trilha?.getCapabilities) return false;
+    const capacidades = trilha.getCapabilities();
+    const avancado = [];
+    if (capacidades.exposureMode?.includes('manual')) avancado.push({ exposureMode: 'manual' });
+    if (capacidades.whiteBalanceMode?.includes('manual')) {
+      avancado.push({ whiteBalanceMode: 'manual' });
+    }
+    if (!avancado.length) return false;
+    await trilha.applyConstraints({ advanced: avancado });
+    return true;
+  } catch {
+    // Falhar aqui é rotina e não deve interromper a medição.
+    return false;
+  }
 }
 
 function pararCamera() {

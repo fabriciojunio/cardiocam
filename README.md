@@ -50,6 +50,22 @@ mesma banda de frequência.
 **Por que quatro algoritmos.** Eles não são intercambiáveis, e a diferença entre
 eles é o conteúdo mais interessante do projeto (veja a tabela abaixo).
 
+**Por que o fundo do quadro é medido junto.** A parede atrás da pessoa não tem
+pulso: tudo que oscila nela é luz do ambiente ou o ganho da câmera se ajustando
+sozinho. Isso torna o fundo uma medida direta da perturbação, e o que for
+explicável por ele é removido do sinal do rosto.
+
+Esse passo fecha um buraco que os métodos cromáticos deixam. CHROM e POS partem
+da hipótese de que a distorção é proporcional nos três canais, o que vale para
+mudança de brilho mas não para o balanço de branco automático, que ajusta cada
+canal separadamente. Em cenário com balanço de branco oscilando dentro da banda
+cardíaca, a taxa de acerto foi de 1 em 16 sem a correção para 16 em 16 com ela.
+
+O ideal seria simplesmente desligar exposição e balanço de branco automáticos, e
+o sistema tenta fazer isso ao abrir a câmera. Muitas webcams não expõem esses
+controles: a usada no desenvolvimento recusa toda tentativa nos dois backends do
+Windows. A correção por fundo funciona independentemente disso.
+
 ## Versão web
 
 **https://cardiocam.vercel.app**
@@ -178,14 +194,19 @@ pytest -m "not lento"          # pula os testes de vídeo
 pytest --cov=cardiocam         # com cobertura
 ```
 
-São 1.950 casos, e nenhum usa simulacro no lugar do código real. A estratégia é
-a mesma em todos os níveis: gerar um sinal cuja frequência verdadeira nós
-escolhemos, rodar o sistema de verdade e conferir o que sai.
+São 1.996 casos em Python e 306 no navegador, e nenhum usa simulacro no lugar do
+código real. A estratégia é a mesma em todos os níveis: gerar um sinal cuja
+frequência verdadeira nós escolhemos, rodar o sistema de verdade e conferir o
+que sai.
 
-- **Unidade** (1.309 casos): resposta em frequência do filtro medida em dezenas
+```bash
+cd web && npm test     # os 306 casos da versão web, em Node
+```
+
+- **Unidade** (1.355 casos): resposta em frequência do filtro medida em dezenas
   de frequências, recuperação de senoides varrendo a banda de 45 a 220 bpm em
-  passos de 2,5 bpm, remoção de tendência, detecção de picos, geometria,
-  segmentação de pele em oito tons diferentes.
+  passos de 2,5 bpm, remoção de tendência, rectificação por referência de fundo,
+  detecção de picos, geometria, segmentação de pele em oito tons diferentes.
 - **Integração** (543 casos): os quatro algoritmos sobre séries RGB modeladas
   fisicamente, variando tom de pele, taxa de quadros, amplitude do pulso, ruído
   e interferência; mais pipeline, fontes, interface e linha de comando.

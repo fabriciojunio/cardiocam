@@ -64,7 +64,26 @@ def _comando_ao_vivo(argumentos: argparse.Namespace) -> int:
 
     fonte = abertura.desempacotar()
     print(
-        f"Câmera {argumentos.camera} aberta a {fonte.fps:.0f} quadros por segundo.\n"
+        f"Câmera {argumentos.camera} aberta a {fonte.fps:.0f} quadros por segundo "
+        f"pelo {fonte.backend}."
+    )
+
+    travados = fonte.ajustes_travados
+    if travados.get("exposicao") or travados.get("balanco_de_branco"):
+        quais = [
+            nome
+            for nome, chave in (("exposição", "exposicao"), ("balanço de branco", "balanco_de_branco"))
+            if travados.get(chave)
+        ]
+        print(f"Ajuste automático de {' e de '.join(quais)} desligado.")
+    else:
+        print(
+            "Esta câmera não permite desligar exposição e balanço de branco\n"
+            "automáticos. Eles trabalham contra a medição, mas a correção por\n"
+            "referência de fundo compensa boa parte disso."
+        )
+
+    print(
         "Fique de frente para a câmera, bem iluminado e o mais parado possível.\n"
         "A primeira leitura aparece depois de encher a janela de análise."
     )

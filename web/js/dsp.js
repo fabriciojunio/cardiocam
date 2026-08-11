@@ -258,6 +258,82 @@ export function estimarFrequencia(sinal, fps, minHz = 0.75, maxHz = 3.3) {
   return { hz, bpm: hz * 60, snrDb, espectro: daBanda };
 }
 
+/**
+ * Remove de um sinal a parte explicável por uma referência.
+ *
+ * A referência é o fundo do quadro, que não tem pulso: tudo que oscila nele é
+ * iluminação do ambiente ou o ganho da câmera se ajustando sozinho. Como rosto
+ * e fundo recebem a mesma luz, o que for previsível a partir do fundo pode ser
+ * retirado do rosto.
+ *
+ * Isso cobre um caso que CHROM e POS não cobrem: os dois cancelam variação de
+ * intensidade comum aos três canais, mas o balanço de branco automático aplica
+ * ganho diferente por canal e escapa da projeção cromática.
+ *
+ * Resolve por mínimos quadrados com alguns atrasos, porque o controle
+ * automático da câmera reage alguns quadros depois da mudança de luz.
+ */
+export function removerReferencia(sinal, referencia, atrasos = 3) {
+  const n = sinal.length;
+  if (!n || referencia.length !== n) return sinal.slice();
+
+  const desvioRef = desvioPadrao(referencia);
+  const desvioSinal = desvioPadrao(sinal);
+  if (desvioRef < 1e-12 || desvioSinal < 1e-12) return sinal.slice();
+
+  const mediaRef = media(referencia);
+  const refNorm = referencia.map((x) => (x - mediaRef) / desvioRef);
+  const mediaSinal = media(sinal);
+  const alvo = sinal.map((x) => x - mediaSinal);
+
+  const k = Math.max(1, Math.min(atrasos, Math.max(1, Math.floor(n / 8))));
+
+  // Matriz normal k x k e vetor k, resolvidos por eliminação de Gauss. Com k
+  // pequeno isso é mais direto que trazer uma biblioteca de álgebra linear.
+  const A = Array.from({ length: k }, () => new Float64Array(k + 1));
+  const coluna = (atraso, i) => (i - atraso >= 0 ? refNorm[i - atraso] : 0);
+
+  for (let a = 0; a < k; a++) {
+    for (let b = 0; b < k; b++) {
+      let s = 0;
+      for (let i = 0; i < n; i++) s += coluna(a, i) * coluna(b, i);
+      A[a][b] = s;
+    }
+    let s = 0;
+    for (let i = 0; i < n; i++) s += coluna(a, i) * alvo[i];
+    A[a][k] = s;
+    // Regularização mínima, para o sistema não ficar mal condicionado quando a
+    // referência for quase constante.
+    A[a][a] += 1e-9;
+  }
+
+  for (let p = 0; p < k; p++) {
+    let melhor = p;
+    for (let l = p + 1; l < k; l++) if (Math.abs(A[l][p]) > Math.abs(A[melhor][p])) melhor = l;
+    if (Math.abs(A[melhor][p]) < 1e-12) return sinal.slice();
+    [A[p], A[melhor]] = [A[melhor], A[p]];
+    for (let l = 0; l < k; l++) {
+      if (l === p) continue;
+      const fator = A[l][p] / A[p][p];
+      for (let c = p; c <= k; c++) A[l][c] -= fator * A[p][c];
+    }
+  }
+
+  const coeficientes = new Float64Array(k);
+  for (let p = 0; p < k; p++) {
+    coeficientes[p] = A[p][k] / A[p][p];
+    if (!Number.isFinite(coeficientes[p])) return sinal.slice();
+  }
+
+  const limpo = new Array(n);
+  for (let i = 0; i < n; i++) {
+    let estimado = 0;
+    for (let a = 0; a < k; a++) estimado += coeficientes[a] * coluna(a, i);
+    limpo[i] = alvo[i] - estimado;
+  }
+  return limpo;
+}
+
 /** Classificação legível da qualidade, igual à da versão em Python. */
 export function confiancaDe(snrDb) {
   if (snrDb >= 6) return 'alta';

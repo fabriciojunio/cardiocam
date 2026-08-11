@@ -66,6 +66,12 @@ class SerieRGB:
     azul: np.ndarray
     fps: float
     instantes: np.ndarray = field(default=None)  # type: ignore[assignment]
+    fundo: np.ndarray | None = None
+    """Média RGB do fundo, na mesma ordem e comprimento, quando disponível.
+
+    O fundo não tem pulso: tudo que oscila nele é iluminação do ambiente ou o
+    ganho da câmera se ajustando sozinho. Serve de referência para remover essa
+    perturbação do sinal do rosto."""
 
     def __post_init__(self) -> None:
         tamanhos = {len(self.vermelho), len(self.verde), len(self.azul)}
@@ -79,6 +85,13 @@ class SerieRGB:
             )
         elif len(self.instantes) != len(self.verde):
             raise ValueError("O vetor de instantes não casa com o número de amostras.")
+        if self.fundo is not None:
+            fundo = np.asarray(self.fundo, dtype=float)
+            if fundo.shape != (3, len(self.verde)):
+                raise ValueError(
+                    "O fundo precisa ser uma matriz 3xN com o mesmo número de amostras."
+                )
+            object.__setattr__(self, "fundo", fundo)
 
     def __len__(self) -> int:
         return len(self.verde)
@@ -103,6 +116,7 @@ class SerieRGB:
         return SerieRGB(
             self.vermelho[-n:], self.verde[-n:], self.azul[-n:], self.fps,
             self.instantes[-n:],
+            None if self.fundo is None else self.fundo[:, -n:],
         )
 
 
