@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cardiocam — medição de frequência cardíaca por vídeo</title>
+<meta name="description" content="Mede frequência cardíaca a partir de vídeo, sem contato. Processamento local, nenhuma imagem sai do aparelho.">
+<meta name="color-scheme" content="dark">
+<link rel="stylesheet" href="estilo.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23111413'/><path d='M1 9h3l1.5-4 2 8 2-6 1.5 2h4' stroke='%234ea87a' stroke-width='1.2' fill='none'/></svg>">
+</head>
+<body>
+
+<header class="cabecalho">
+  <div class="marca">
+    <svg class="marca-traco" viewBox="0 0 64 20" aria-hidden="true">
+      <path d="M0 12h10l4-9 5 17 5-13 3 5h32" fill="none" stroke="currentColor" stroke-width="1.6"/>
+    </svg>
+    <div>
+      <h1>Cardiocam</h1>
+      <p class="marca-sub">Fotopletismografia remota</p>
+    </div>
+  </div>
+  <nav class="abas" role="tablist">
+    <button class="aba aba-ativa" data-vista="medir" role="tab">Medir</button>
+    <button class="aba" data-vista="historico" role="tab">Histórico <span class="contador" id="contadorHistorico">0</span></button>
+    <button class="aba" data-vista="sobre" role="tab">Como funciona</button>
+  </nav>
+</header>
+
+<!-- ===================== MEDIR ===================== -->
+<main class="vista vista-ativa" id="vista-medir">
+
+  <section class="coluna coluna-captura">
+    <div class="rotulo-secao">
+      <span>Captura</span>
+      <div class="fonte-troca">
+        <button class="pilula pilula-ativa" id="btnFonteCamera">Câmera</button>
+        <button class="pilula" id="btnFonteArquivo">Arquivo</button>
+      </div>
+    </div>
+
+    <div class="palco" id="palco">
+      <video id="video" playsinline muted></video>
+      <canvas id="canvasOculto" hidden></canvas>
+
+      <div class="guia" id="guia">
+        <div class="guia-oval"></div>
+        <div class="guia-roi guia-testa"></div>
+        <div class="guia-roi guia-bochecha-e"></div>
+        <div class="guia-roi guia-bochecha-d"></div>
+      </div>
+
+      <div class="palco-vazio" id="palcoVazio">
+        <p>A câmera ainda não foi iniciada.</p>
+        <p class="fraco">Nada é gravado. O vídeo não sai deste aparelho.</p>
+      </div>
+
+      <div class="barra-progresso" id="barraProgresso"><i></i></div>
+    </div>
+
+    <p class="estado" id="estado">Pronto para começar.</p>
+
+    <div class="acoes">
+      <button class="botao botao-principal" id="btnIniciar">Iniciar medição</button>
+      <button class="botao" id="btnParar" disabled>Parar</button>
+      <button class="botao" id="btnSalvar" disabled>Salvar resultado</button>
+    </div>
+
+    <input type="file" id="arquivoVideo" accept="video/*" hidden>
+  </section>
+
+  <section class="coluna coluna-leitura">
+
+    <div class="leitura">
+      <div class="leitura-valor">
+        <output id="bpm" class="numerao">--</output>
+        <span class="unidade">bpm</span>
+      </div>
+      <div class="leitura-selo" id="selo" data-nivel="vazio">aguardando</div>
+    </div>
+
+    <dl class="grade-dados">
+      <div><dt>Relação sinal-ruído</dt><dd id="dadoSnr">—</dd></div>
+      <div><dt>Janelas analisadas</dt><dd id="dadoJanelas">—</dd></div>
+      <div><dt>Dispersão entre janelas</dt><dd id="dadoDispersao">—</dd></div>
+      <div><dt>Taxa de quadros</dt><dd id="dadoFps">—</dd></div>
+    </dl>
+
+    <div class="grafico">
+      <span class="grafico-titulo">Onda de pulso</span>
+      <canvas id="canvasOnda" width="600" height="120"></canvas>
+    </div>
+
+    <div class="grafico">
+      <span class="grafico-titulo">Espectro na banda cardíaca</span>
+      <canvas id="canvasEspectro" width="600" height="120"></canvas>
+      <div class="eixo"><span>45</span><span>90</span><span>135</span><span>198 bpm</span></div>
+    </div>
+
+    <div class="ajustes">
+      <div class="rotulo-secao"><span>Registro</span></div>
+      <div class="campo">
+        <label for="pessoa">Nome de quem está sendo medido</label>
+        <input type="text" id="pessoa" list="pessoasConhecidas" placeholder="opcional" autocomplete="off" maxlength="60">
+        <datalist id="pessoasConhecidas"></datalist>
+      </div>
+      <div class="campo">
+        <label for="observacao">Observação</label>
+        <input type="text" id="observacao" placeholder="repouso, após exercício, etc." autocomplete="off" maxlength="80">
+      </div>
+      <div class="campo-duplo">
+        <div class="campo">
+          <label for="algoritmo">Algoritmo</label>
+          <select id="algoritmo">
+            <option value="pos" selected>POS — plano ortogonal</option>
+            <option value="chrom">CHROM — crominância</option>
+            <option value="verde">GREEN — só canal verde</option>
+          </select>
+        </div>
+        <div class="campo">
+          <label for="janela">Janela</label>
+          <select id="janela">
+            <option value="10">10 segundos</option>
+            <option value="15" selected>15 segundos</option>
+            <option value="20">20 segundos</option>
+            <option value="30">30 segundos</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+  </section>
+</main>
+
+<!-- ===================== HISTÓRICO ===================== -->
+<main class="vista" id="vista-historico">
+  <section class="coluna coluna-larga">
+    <div class="rotulo-secao">
+      <span>Medições salvas</span>
+      <div class="fonte-troca">
+        <button class="pilula" id="btnExportar">Exportar CSV</button>
+        <button class="pilula pilula-perigo" id="btnLimpar">Apagar tudo</button>
+      </div>
+    </div>
+
+    <div class="filtro">
+      <label for="filtroPessoa">Filtrar por pessoa</label>
+      <select id="filtroPessoa"><option value="">todas</option></select>
+    </div>
+
+    <div class="tabela-caixa">
+      <table class="tabela" id="tabelaHistorico">
+        <thead>
+          <tr>
+            <th>Pessoa</th><th>Data</th><th class="num">bpm</th>
+            <th>Confiança</th><th class="num">SNR</th><th>Método</th>
+            <th>Observação</th><th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p class="vazio-aviso" id="historicoVazio">Nenhuma medição salva ainda.</p>
+    </div>
+
+    <div class="resumo-pessoa" id="resumoPessoa" hidden></div>
+  </section>
+</main>
+
+<!-- ===================== SOBRE ===================== -->
+<main class="vista" id="vista-sobre">
+  <section class="coluna coluna-larga texto">
+    <h2>O que está acontecendo aqui</h2>
+    <p>
+      A cada batida, o coração empurra sangue para os capilares da pele. Mais
+      hemoglobina no caminho da luz significa mais absorção e menos luz refletida
+      de volta para a câmera. A pele escurece e clareia no ritmo do coração.
+    </p>
+    <p>
+      A variação é de <strong>0,1% a 1%</strong>, invisível a olho nu e menor que
+      o ruído de um pixel isolado. O que torna a medição possível é a média
+      espacial: como o ruído é aproximadamente independente entre pixels,
+      promediar N deles reduz o ruído por um fator de raiz de N. É por isso que o
+      sistema mede regiões inteiras da testa e das bochechas, e não pontos.
+    </p>
+
+    <h2>Por que o rosto precisa ficar no contorno</h2>
+    <p>
+      Não há detecção automática de rosto nesta versão: seria preciso baixar um
+      modelo de vários megabytes. Pedir que você encaixe o rosto no contorno
+      resolve isso e ainda traz um ganho colateral. Com o rosto ancorado, a
+      região medida para de tremer entre quadros, e esse tremor é justamente o
+      que mais estraga a medição quando a detecção é automática.
+    </p>
+
+    <h2>Os três métodos</h2>
+    <p>
+      <strong>GREEN</strong> usa só o canal verde, onde a hemoglobina mais
+      absorve. Funciona bem parado e com luz estável, e falha quando a
+      iluminação oscila: olhando só o brilho, não há como distinguir "chegou mais
+      sangue" de "chegou mais luz".
+    </p>
+    <p>
+      <strong>CHROM</strong> e <strong>POS</strong> exploram o fato de que o
+      pulso muda a <em>proporção</em> entre os canais, enquanto a iluminação
+      muda os três juntos. Em testes com interferência de luz dentro da banda
+      cardíaca, o GREEN erra cerca de 42&nbsp;bpm e os dois métodos cromáticos
+      erram menos de 0,1. O POS é o padrão porque dispensa suposição sobre o tom
+      de pele.
+    </p>
+
+    <h2>Como obter uma boa leitura</h2>
+    <ul class="lista">
+      <li>Luz vinda <strong>da frente</strong>, nunca de trás. Contra a janela o sinal desaparece.</li>
+      <li>Fique o mais parado possível e evite falar durante a medição.</li>
+      <li>Rosto ocupando boa parte do contorno, a cerca de meio metro da câmera.</li>
+      <li>Olhe a confiança. Abaixo de 2&nbsp;dB o número é chute e está sinalizado.</li>
+      <li>Para comparar com relógio ou oxímetro, meça <strong>ao mesmo tempo</strong>. Diferença de 3 a 5&nbsp;bpm entre aparelhos é normal.</li>
+    </ul>
+
+    <h2>Limites honestos</h2>
+    <ul class="lista">
+      <li><strong>Não é dispositivo médico</strong> e não serve para diagnóstico.</li>
+      <li><strong>Não funciona a partir de uma foto.</strong> Frequência é medida no tempo; uma imagem isolada não tem eixo temporal.</li>
+      <li>Vídeo de chamada comprimido degrada bastante: os codecs descartam justamente variações sutis em regiões homogêneas.</li>
+    </ul>
+
+    <h2>Privacidade</h2>
+    <p>
+      Todo o processamento acontece dentro do navegador. Nenhum quadro de vídeo
+      é enviado para servidor nenhum, porque não existe servidor. As medições
+      salvas ficam apenas no armazenamento local deste aparelho, e o botão de
+      apagar remove tudo.
+    </p>
+    <p>
+      Medir a frequência cardíaca de outra pessoa é tratamento de dado pessoal
+      sensível pela LGPD. Peça consentimento antes.
+    </p>
+  </section>
+</main>
+
+<footer class="rodape">
+  <span>Processamento local. Nenhuma imagem sai deste aparelho.</span>
+  <span class="fraco">Não é dispositivo médico. Não use para diagnóstico.</span>
+</footer>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

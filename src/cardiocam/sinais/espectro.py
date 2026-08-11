@@ -177,7 +177,16 @@ def analisar(
     metodo: str = "periodograma",
     zero_padding: int = FATOR_ZERO_PADDING,
 ) -> Resultado[AnaliseEspectral]:
-    """Encontra a frequência dominante do pulso dentro da banda fisiológica."""
+    """Encontra a frequência dominante do pulso dentro da banda fisiológica.
+
+    Uma variante deste seletor foi testada e descartada: pontuar cada candidata
+    somando a energia encontrada no dobro da frequência, na expectativa de que o
+    pulso, por ter harmônico, vencesse artefatos senoidais. A medição mostrou
+    que a ideia premia subharmônicos, porque uma interferência a 48 bpm recebe o
+    bônus do próprio pulso a 96 bpm. Na faixa em que o sistema já acertava tudo,
+    a taxa caiu de 100% para 75%. O maior pico simples continua sendo o melhor
+    critério.
+    """
     banda = banda or BandaCardiaca()
     if len(pulso) < 8:
         return Falha(JanelaInsuficiente(len(pulso), 8))

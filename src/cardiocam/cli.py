@@ -200,17 +200,23 @@ def _adicionar_opcoes_analise(analisador: argparse.ArgumentParser) -> None:
         default="pos",
         help="método de extração do pulso (padrão: pos)",
     )
+    # Janela de 15 s em vez de 10: a resolução em frequência melhora e o ruído
+    # é promediado por mais tempo, o que importa muito com webcam modesta. O
+    # custo é a leitura demorar mais para aparecer e reagir mais devagar.
     analisador.add_argument(
-        "--janela", type=float, default=10.0, help="tamanho da janela em segundos"
+        "--janela", type=float, default=15.0, help="tamanho da janela em segundos"
     )
     analisador.add_argument(
         "--passo", type=float, default=1.0, help="intervalo entre estimativas"
     )
+    # A banda começa em 45 e não em 42 bpm de propósito: logo acima de zero
+    # sobra energia de deriva de iluminação que o detrend não removeu por
+    # completo, e ela compete com o pulso quando o sinal está fraco.
     analisador.add_argument(
-        "--bpm-minimo", type=float, default=42.0, help="limite inferior da banda"
+        "--bpm-minimo", type=float, default=45.0, help="limite inferior da banda"
     )
     analisador.add_argument(
-        "--bpm-maximo", type=float, default=240.0, help="limite superior da banda"
+        "--bpm-maximo", type=float, default=200.0, help="limite superior da banda"
     )
     analisador.add_argument("--salvar", help="grava as estimativas em CSV")
 

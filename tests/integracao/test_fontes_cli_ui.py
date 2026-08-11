@@ -429,13 +429,26 @@ def test_algoritmo_invalido_e_recusado() -> None:
 
 @pytest.mark.parametrize("bpm", (55.0, 72.0, 100.0))
 def test_comando_simular_roda_de_ponta_a_ponta(bpm: float, capsys) -> None:
+    # A duração precisa superar a janela de análise padrão, que é de 15 s.
     codigo = main(
-        ["simular", "--bpm", str(bpm), "--duracao", "14", "--algoritmo", "pos"]
+        ["simular", "--bpm", str(bpm), "--duracao", "22", "--algoritmo", "pos"]
     )
     assert codigo == 0
     saida = capsys.readouterr().out
     assert "Frequência cardíaca" in saida
     assert "Erro absoluto" in saida
+
+
+def test_video_mais_curto_que_a_janela_avisa_o_motivo(capsys) -> None:
+    """Não basta não medir: o programa precisa dizer por quê.
+
+    Com a janela padrão de 15 s, um vídeo de 8 s não produz estimativa alguma, e
+    sem explicação isso parece defeito.
+    """
+    assert main(["simular", "--bpm", "72", "--duracao", "8"]) == 0
+    saida = capsys.readouterr().out
+    assert "Nenhuma janela" in saida
+    assert "mais curto que a janela" in saida
 
 
 def test_comando_avaliar_imprime_tabela(capsys) -> None:

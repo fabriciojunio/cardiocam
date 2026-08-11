@@ -27,10 +27,17 @@ class RegiaoInteresse(str, Enum):
 
 
 # Frações (x_inicio, y_inicio, x_fim, y_fim) relativas à caixa do rosto.
-_TESTA = (0.30, 0.15, 0.70, 0.30)
-_BOCHECHA_ESQUERDA = (0.13, 0.55, 0.35, 0.75)
-_BOCHECHA_DIREITA = (0.65, 0.55, 0.87, 0.75)
-_ROSTO_CENTRAL = (0.20, 0.20, 0.80, 0.80)
+#
+# As regiões são generosas de propósito. Como a média espacial reduz o ruído
+# por um fator de raiz de N, dobrar a área de pele medida vale cerca de 1,5 dB
+# de relação sinal-ruído, e com webcam ruim esse ganho decide entre uma leitura
+# confiável e uma leitura descartada. A máscara de pele fica encarregada de
+# excluir cabelo, sobrancelha e fundo que entrem nas bordas, então ampliar
+# custa pouco e rende bastante.
+_TESTA = (0.24, 0.12, 0.76, 0.32)
+_BOCHECHA_ESQUERDA = (0.08, 0.50, 0.38, 0.80)
+_BOCHECHA_DIREITA = (0.62, 0.50, 0.92, 0.80)
+_ROSTO_CENTRAL = (0.15, 0.15, 0.85, 0.85)
 
 _MAPA: dict[RegiaoInteresse, tuple[tuple[float, float, float, float], ...]] = {
     RegiaoInteresse.TESTA: (_TESTA,),

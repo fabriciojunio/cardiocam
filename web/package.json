@@ -1,0 +1,10 @@
+{
+  "name": "cardiocam-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Interface web do Cardiocam. Processa tudo no navegador, sem enviar imagem para servidor.",
+  "scripts": {
+    "test": "node testes/testar.js"
+  }
+}

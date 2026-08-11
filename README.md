@@ -50,6 +50,20 @@ mesma banda de frequência.
 **Por que quatro algoritmos.** Eles não são intercambiáveis, e a diferença entre
 eles é o conteúdo mais interessante do projeto (veja a tabela abaixo).
 
+## Versão web
+
+**https://cardiocam.vercel.app**
+
+Roda no navegador, em computador e celular, sem instalar nada. Mede pela câmera
+ou analisa um vídeo escolhido do aparelho, guarda as medições por pessoa e
+exporta em CSV.
+
+Tudo é processado dentro do navegador. Não existe servidor neste projeto, e o
+cabeçalho `Content-Security-Policy` fecha isso com `connect-src 'none'`: ainda
+que algum código tentasse enviar dados para fora, o navegador recusaria a
+conexão. Detalhes e diferenças em relação a esta versão em
+[web/LEIAME.md](web/LEIAME.md).
+
 ## Instalação
 
 ```bash
@@ -227,6 +241,9 @@ src/cardiocam/
   pipeline/     orquestração e estado da medição
   ui/           painel sobreposto ao vídeo
   avaliacao/    benchmark comparativo
+web/
+  js/           porte do processamento para o navegador
+  testes/       276 casos rodando em Node, sem navegador
 ```
 
 As dependências apontam sempre para dentro: `dominio` não importa nada do

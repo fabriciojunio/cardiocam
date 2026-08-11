@@ -15,3 +15,7 @@ htmlcov/
 *.mp4
 *.avi
 saidas/
+
+# Vercel
+.vercel/
+node_modules/
