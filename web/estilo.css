@@ -29,35 +29,6 @@
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
-/* Modo de iluminação pela tela.
-
-   A interface é escura por padrão porque uma tela clara joga luz na pele e
-   altera o que está sendo medido. Só que o problema deixa de ser esse quando a
-   pessoa está num ambiente mal iluminado ou contra a luz: aí falta sinal, e a
-   câmera fica caçando exposição, o que injeta uma variação muito maior que a do
-   pulso.
-
-   Luz que muda atrapalha; luz constante ajuda. Ligando este modo, a tela vira
-   uma fonte de luz frontal fixa, que é justamente o que a medição pede. Faz
-   diferença sobretudo no celular, onde a tela fica perto do rosto.
-
-   Aproveita as variáveis já existentes, então uma dúzia de linhas troca a
-   aparência inteira. */
-body.iluminando {
-  --fundo: #f6f6f4;
-  --fundo-painel: #ffffff;
-  --fundo-fundo: #ffffff;
-  --linha: #d7dad8;
-  --linha-forte: #b9bfbc;
-  --texto: #14171a;
-  --texto-fraco: #4b5350;
-  --texto-apagado: #6d7572;
-  --verde: #1f7a4d;
-  --verde-escuro: #9fd2b8;
-}
-body.iluminando .palco { background: #ffffff; }
-body.iluminando .guia-oval { border-color: rgba(20, 23, 26, .45); }
-
 * { box-sizing: border-box; }
 
 html, body {

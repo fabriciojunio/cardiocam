@@ -42,7 +42,6 @@ const el = {
   btnArquivo: $('btnFonteArquivo'),
   dispositivo: $('dispositivo'),
   campoDispositivo: $('campoDispositivo'),
-  btnIluminar: $('btnIluminar'),
   palcoLeitura: $('palcoLeitura'),
   bpmPalco: $('bpmPalco'),
   seloPalco: $('seloPalco'),
@@ -419,45 +418,12 @@ function pararCamera() {
   el.palcoLeitura.hidden = true;
 }
 
-/**
- * Liga uma fonte de luz frontal.
- *
- * Tenta primeiro a lanterna do aparelho, que é a melhor luz possível. Ela quase
- * nunca está disponível aqui: a lanterna fica do mesmo lado da câmera traseira,
- * e a medição usa a frontal. Quando não dá, a tela assume o papel.
- *
- * Deixar a tela branca parece contradizer a escolha de interface escura, e não
- * contradiz. O problema de uma tela clara seria variar e alterar o que está
- * sendo medido; uma tela branca fixa é apenas uma lâmpada constante, que é
- * exatamente o que a medição pede quando o ambiente está mal iluminado ou a luz
- * vem de trás.
- */
-async function alternarLuz() {
-  const ligando = !document.body.classList.contains('iluminando');
-
-  const trilha = fluxo?.getVideoTracks?.()[0];
-  if (trilha?.getCapabilities) {
-    try {
-      const capacidades = trilha.getCapabilities();
-      if (capacidades.torch) {
-        await trilha.applyConstraints({ advanced: [{ torch: ligando }] });
-        el.btnIluminar.classList.toggle('pilula-ativa', ligando);
-        dizer(ligando ? 'Lanterna ligada.' : 'Lanterna desligada.');
-        return;
-      }
-    } catch {
-      // Lanterna indisponível é o caso comum; a tela resolve.
-    }
-  }
-
-  document.body.classList.toggle('iluminando', ligando);
-  el.btnIluminar.classList.toggle('pilula-ativa', ligando);
-  dizer(
-    ligando
-      ? 'Tela clara ligada, use-a como luz. Aproxime o rosto e reinicie a medição.'
-      : 'Tela clara desligada.',
-  );
-}
+/* A opção de deixar a tela branca para iluminar o rosto foi retirada.
+   Ela partia da suposição de que faltava luz, e a medição no sinal real
+   mostrou que não era esse o problema: com iluminação boa, a amplitude na
+   banda cardíaca continuou igual ou abaixo do ruído de banda larga. Mais luz
+   não resolve o que a própria câmera introduz. Manter o botão só daria a
+   impressão de que existe um ajuste capaz de salvar a medição. */
 
 function laco() {
   if (!rodando) return;
@@ -822,7 +788,6 @@ el.arquivo.addEventListener('change', (evento) => {
 });
 
 el.btnParar.addEventListener('click', parar);
-el.btnIluminar.addEventListener('click', alternarLuz);
 el.btnSalvar.addEventListener('click', salvar);
 el.filtroPessoa.addEventListener('change', atualizarHistorico);
 el.btnExportar.addEventListener('click', baixarCsv);
