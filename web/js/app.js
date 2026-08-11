@@ -38,6 +38,7 @@ const el = {
   btnParar: $('btnParar'),
   btnSalvar: $('btnSalvar'),
   btnCamera: $('btnFonteCamera'),
+  btnDedo: $('btnFonteDedo'),
   btnArquivo: $('btnFonteArquivo'),
   dispositivo: $('dispositivo'),
   campoDispositivo: $('campoDispositivo'),
@@ -253,6 +254,16 @@ function pedirCamera(restricoes, prazoMs = PRAZO_POR_TENTATIVA_MS) {
  */
 async function abrirFluxo(idDispositivo) {
   const tentativas = [];
+
+  // No modo dedo a câmera é a traseira, porque é do lado dela que fica a
+  // lanterna, e sem lanterna não há transiluminação do tecido.
+  if (fonte === 'dedo') {
+    tentativas.push({ facingMode: { exact: 'environment' } });
+    tentativas.push({ facingMode: 'environment' });
+    tentativas.push(true);
+    return await primeiraQueAbrir(tentativas);
+  }
+
   if (idDispositivo) {
     tentativas.push({ deviceId: { exact: idDispositivo }, width: { ideal: 640 }, height: { ideal: 480 } });
     tentativas.push({ deviceId: { exact: idDispositivo } });
@@ -267,6 +278,10 @@ async function abrirFluxo(idDispositivo) {
   tentativas.push({ facingMode: 'user' });
   tentativas.push(true);
 
+  return await primeiraQueAbrir(tentativas);
+}
+
+async function primeiraQueAbrir(tentativas) {
   let ultimoErro = null;
   for (let i = 0; i < tentativas.length; i++) {
     if (cancelado) throw new Error('Medição cancelada.');
@@ -281,6 +296,19 @@ async function abrirFluxo(idDispositivo) {
     }
   }
   throw ultimoErro ?? new Error('Não foi possível abrir a câmera.');
+}
+
+/** Liga a lanterna. Devolve se conseguiu. */
+async function ligarLanterna() {
+  try {
+    const trilha = fluxo?.getVideoTracks?.()[0];
+    if (!trilha?.getCapabilities) return false;
+    if (!trilha.getCapabilities().torch) return false;
+    await trilha.applyConstraints({ advanced: [{ torch: true }] });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function listarCameras() {
@@ -506,8 +534,11 @@ async function comecar() {
     el.btnSalvar.disabled = true;
 
     medidor = new Medidor({
-      janelaS: Number(el.janela.value),
+      // O sinal do dedo é ordens de grandeza mais forte que o do rosto, então
+      // uma janela curta já basta e a leitura aparece bem mais rápido.
+      janelaS: fonte === 'dedo' ? 12 : Number(el.janela.value),
       algoritmo: el.algoritmo.value,
+      modo: fonte === 'dedo' ? 'dedo' : 'rosto',
     });
 
     dizer('Pedindo acesso à câmera…');
@@ -523,11 +554,24 @@ async function comecar() {
     }
 
     el.palcoVazio.hidden = true;
-    el.guia.classList.add('visivel');
     el.palco.classList.remove('arquivo');
     rodando = true;
     ultimaAnalise = 0;
-    dizer('Encaixe o rosto no contorno e fique parado.');
+
+    if (fonte === 'dedo') {
+      el.guia.classList.remove('visivel');
+      const acendeu = await ligarLanterna();
+      dizer(
+        acendeu
+          ? 'Lanterna acesa. Cubra a lente com a ponta do dedo, sem apertar.'
+          : 'Este aparelho não deixa ligar a lanterna pelo navegador. Ligue-a pela '
+            + 'central de atalhos do sistema e cubra a lente com o dedo.',
+        acendeu ? '' : 'alerta',
+      );
+    } else {
+      el.guia.classList.add('visivel');
+      dizer('Encaixe o rosto no contorno e alinhe os olhos na linha.');
+    }
     laco();
   } catch (erro) {
     pararCamera();
@@ -733,22 +777,38 @@ document.querySelectorAll('.aba').forEach((aba) => {
   });
 });
 
-el.btnCamera.addEventListener('click', () => {
-  fonte = 'camera';
-  el.btnCamera.classList.add('pilula-ativa');
-  el.btnArquivo.classList.remove('pilula-ativa');
-  el.btnIniciar.textContent = 'Iniciar medição';
+function escolherFonte(nova, botaoAtivo, rotuloBotao, mensagem) {
+  fonte = nova;
+  [el.btnCamera, el.btnDedo, el.btnArquivo].forEach((b) =>
+    b.classList.toggle('pilula-ativa', b === botaoAtivo),
+  );
+  el.btnIniciar.textContent = rotuloBotao;
   el.palco.classList.remove('arquivo');
-  dizer('Pronto para começar.');
-});
+  el.campoDispositivo.hidden = nova !== 'camera' || el.dispositivo.options.length <= 1;
+  dizer(mensagem);
+}
 
-el.btnArquivo.addEventListener('click', () => {
-  fonte = 'arquivo';
-  el.btnArquivo.classList.add('pilula-ativa');
-  el.btnCamera.classList.remove('pilula-ativa');
-  el.btnIniciar.textContent = 'Escolher vídeo';
-  dizer('Escolha um vídeo com o rosto enquadrado no contorno.');
-});
+el.btnCamera.addEventListener('click', () =>
+  escolherFonte('camera', el.btnCamera, 'Iniciar medição', 'Pronto para começar.'),
+);
+
+el.btnDedo.addEventListener('click', () =>
+  escolherFonte(
+    'dedo',
+    el.btnDedo,
+    'Iniciar medição',
+    'Use a câmera de trás: cubra a lente com a ponta do dedo, sem apertar.',
+  ),
+);
+
+el.btnArquivo.addEventListener('click', () =>
+  escolherFonte(
+    'arquivo',
+    el.btnArquivo,
+    'Escolher vídeo',
+    'Escolha um vídeo com o rosto enquadrado no contorno.',
+  ),
+);
 
 el.btnIniciar.addEventListener('click', () => {
   if (fonte === 'camera') comecar();

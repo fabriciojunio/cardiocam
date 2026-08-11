@@ -12,7 +12,21 @@
  * fazendo o trabalho do estabilizador.
  */
 
-import { desvioPadrao, estimarFrequencia, media, removerReferencia } from './dsp.js';
+import {
+  desvioPadrao,
+  estimarFrequencia,
+  media,
+  passaFaixa,
+  removerReferencia,
+} from './dsp.js';
+
+/**
+ * Filtragem do sinal do dedo. O sinal é forte o bastante para dispensar
+ * qualquer combinação de canais; basta tirar a tendência e a banda.
+ */
+function passaFaixaDedo(canal, fps) {
+  return passaFaixa(canal.map((x) => -x), fps, BANDA.minHz, BANDA.maxHz);
+}
 import { classificarPele, construirSelecao, mediaDaPele, mediaPorSelecao } from './pele.js';
 import { extrairPulso } from './rppg.js';
 
@@ -115,16 +129,67 @@ export function rectificarPeloFundo(serie, fundo) {
   };
 }
 
+/**
+ * Região central usada no modo dedo. O dedo encostado cobre a lente inteira,
+ * então basta evitar as bordas, onde entra luz que vazou por fora.
+ */
+export const REGIAO_DEDO = { x: 0.3, y: 0.3, largura: 0.4, altura: 0.4 };
+
+/**
+ * Média dos canais no modo dedo, sem classificar pele.
+ *
+ * Com o dedo sobre a lente e a lanterna acesa, a imagem inteira é tecido
+ * iluminado por transiluminação, e o classificador de pele não serve: a cor
+ * fica vermelha saturada, fora da faixa de crominância de pele vista à luz
+ * ambiente. Medir tudo é o certo aqui.
+ *
+ * Também informa se o dedo está bem posicionado. Cobertura ruim deixa entrar
+ * luz do ambiente pela borda, e aí o que se mede é a luz da sala e não o
+ * sangue.
+ */
+export function medirDedo(contexto, largura, altura, passo = 4) {
+  const rx = Math.round(REGIAO_DEDO.x * largura);
+  const ry = Math.round(REGIAO_DEDO.y * altura);
+  const rl = Math.max(1, Math.round(REGIAO_DEDO.largura * largura));
+  const ra = Math.max(1, Math.round(REGIAO_DEDO.altura * altura));
+  const dados = contexto.getImageData(rx, ry, rl, ra).data;
+
+  let somaR = 0;
+  let somaG = 0;
+  let somaB = 0;
+  let n = 0;
+  for (let y = 0; y < ra; y += passo) {
+    for (let x = 0; x < rl; x += passo) {
+      const i = (y * rl + x) * 4;
+      somaR += dados[i];
+      somaG += dados[i + 1];
+      somaB += dados[i + 2];
+      n++;
+    }
+  }
+  if (!n) return null;
+
+  const vermelho = somaR / n;
+  const verde = somaG / n;
+  const azul = somaB / n;
+
+  // O dedo iluminado por trás fica muito mais vermelho que verde e azul.
+  // Sem essa dominância, não há dedo cobrindo a lente.
+  const cobreALente = vermelho > 60 && vermelho > 1.6 * verde && vermelho > 1.6 * azul;
+  return { vermelho, verde, azul, pixels: n, cobreALente };
+}
+
 export class Medidor {
   /**
    * @param {object} opcoes
    * @param {number} opcoes.janelaS  segundos acumulados antes de estimar
    * @param {string} opcoes.algoritmo  pos, chrom ou verde
    */
-  constructor({ janelaS = 15, algoritmo = 'pos', usarFundo = true } = {}) {
+  constructor({ janelaS = 15, algoritmo = 'pos', usarFundo = true, modo = 'rosto' } = {}) {
     this.janelaS = janelaS;
     this.algoritmo = algoritmo;
     this.usarFundo = usarFundo;
+    this.modo = modo;
     this.reiniciar();
   }
 
@@ -166,6 +231,8 @@ export class Medidor {
    */
   processarQuadro(contexto, largura, altura, instanteS) {
     if (this.inicio === null) this.inicio = instanteS;
+
+    if (this.modo === 'dedo') return this._processarDedo(contexto, largura, altura, instanteS);
 
     let somaR = 0;
     let somaG = 0;
@@ -229,6 +296,46 @@ export class Medidor {
     };
   }
 
+  _processarDedo(contexto, largura, altura, instanteS) {
+    const medida = medirDedo(contexto, largura, altura);
+
+    if (!medida || !medida.cobreALente) {
+      this.quadrosSemPele++;
+      if (this.quadrosSemPele > 45) {
+        this.amostras = [];
+        this.bpmSuavizado = null;
+        this.ultimaAnalise = null;
+      }
+      return {
+        temPele: false,
+        progresso: this.progresso,
+        mensagem: 'Cubra a lente com a ponta do dedo, sem apertar.',
+      };
+    }
+
+    this.quadrosSemPele = 0;
+    this.amostras.push({
+      t: instanteS,
+      r: medida.vermelho,
+      g: medida.verde,
+      b: medida.azul,
+      fundo: null,
+    });
+
+    const limite = this.janelaS * 1.3;
+    while (this.amostras.length > 2 && instanteS - this.amostras[0].t > limite) {
+      this.amostras.shift();
+    }
+
+    return {
+      temPele: true,
+      progresso: this.progresso,
+      mensagem: this.progresso < 1
+        ? `Segure assim, faltam ${Math.ceil(this.janelaS - this.duracaoAcumulada)} s.`
+        : 'Medindo.',
+    };
+  }
+
   /** Roda a análise sobre o que já foi acumulado. Devolve null se não der. */
   analisar() {
     if (this.progresso < 1 || this.amostras.length < 64) return null;
@@ -241,6 +348,31 @@ export class Medidor {
     };
 
     if (desvioPadrao(serie.verde) < 1e-6) return null;
+
+    // No modo dedo o algoritmo é sempre o do canal verde. Os métodos
+    // cromáticos existem para separar pulso de variação de iluminação, e aqui
+    // não há iluminação ambiente para separar: a lanterna é fixa e o dedo tapa
+    // a lente. Combinar canais só acrescentaria o ruído do vermelho, que está
+    // saturado, e do azul, que quase não recebe luz através do tecido.
+    if (this.modo === 'dedo') {
+      const pulso = passaFaixaDedo(serie.verde, fps);
+      const resultado = estimarFrequencia(pulso, fps, BANDA.minHz, BANDA.maxHz);
+      if (!resultado) return null;
+      this.bpmSuavizado = this.bpmSuavizado === null
+        ? resultado.bpm
+        : 0.7 * this.bpmSuavizado + 0.3 * resultado.bpm;
+      this.historico.push(resultado.bpm);
+      if (this.historico.length > 60) this.historico.shift();
+      this.ultimaAnalise = {
+        ...resultado,
+        bpmExibido: this.bpmSuavizado,
+        pulso,
+        fps,
+        duracaoS: this.duracaoAcumulada,
+        janelas: this.historico.length,
+      };
+      return this.ultimaAnalise;
+    }
 
     // A rectificação vem antes do algoritmo de propósito: o balanço de branco
     // automático age sobre cada canal separadamente, então é aí que a correção

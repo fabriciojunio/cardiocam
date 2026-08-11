@@ -22,7 +22,7 @@ import {
 } from '../js/dsp.js';
 import { extrairPulso } from '../js/rppg.js';
 import { classificarPele } from '../js/pele.js';
-import { Medidor, rectificarPeloFundo } from '../js/medidor.js';
+import { Medidor, medirDedo, rectificarPeloFundo } from '../js/medidor.js';
 import {
   GANHO_CANAL,
   gerarSerieRGB,
@@ -335,6 +335,72 @@ for (const algoritmo of ['pos', 'chrom']) {
   // último instante, que é o que a janela exige.
   for (let i = 1; i <= 300; i++) medidor.processarQuadro(ctx, 320, 240, i / 30);
   verificar('progresso chega a um', medidor.progresso === 1, `obtido ${medidor.progresso}`);
+}
+
+// ---------------------------------------------------------------------------
+grupo('Modo dedo (fotopletismografia de contato)');
+
+/**
+ * Dedo sobre a lente com a lanterna acesa: a imagem fica vermelha saturada e o
+ * pulso é ordens de grandeza mais forte que no rosto, porque a luz atravessa o
+ * tecido em vez de refletir na superfície.
+ */
+function contextoDeDedo(fatorPulso, aleatorio, cobrindo = true) {
+  const base = cobrindo ? { r: 210, g: 60, b: 45 } : { r: 90, g: 95, b: 100 };
+  return {
+    getImageData(_x, _y, largura, altura) {
+      const dados = new Uint8ClampedArray(largura * altura * 4);
+      for (let i = 0; i < largura * altura; i++) {
+        const ruido = ruidoNormal(aleatorio) * 1.2;
+        dados[i * 4 + 0] = Math.max(0, Math.min(255, base.r + ruido));
+        dados[i * 4 + 1] = Math.max(0, Math.min(255, base.g * fatorPulso + ruido));
+        dados[i * 4 + 2] = Math.max(0, Math.min(255, base.b + ruido));
+        dados[i * 4 + 3] = 255;
+      }
+      return { data: dados };
+    },
+  };
+}
+
+for (const bpm of [52, 64, 76, 88, 104, 128]) {
+  const medidor = new Medidor({ janelaS: 10, modo: 'dedo' });
+  const fps = 30;
+  const total = fps * 16;
+  const aleatorio = geradorAleatorio(bpm);
+  const tempos = Array.from({ length: total }, (_, i) => i / fps);
+  const pulso = ondaDePulso(tempos, bpm / 60);
+
+  for (let i = 0; i < total; i++) {
+    // Amplitude de 4%: no dedo o sinal é muito maior que no rosto.
+    const ctx = contextoDeDedo(1 + 0.04 * pulso[i], aleatorio);
+    medidor.processarQuadro(ctx, 320, 240, tempos[i]);
+  }
+  const analise = medidor.analisar();
+  proximo(`modo dedo recupera ${bpm} bpm`, analise?.bpm, bpm, 2.5);
+  verificar(`modo dedo tem boa confiança em ${bpm} bpm`, analise && analise.snrDb > 3,
+    `snr ${analise ? analise.snrDb.toFixed(1) : 'nulo'} dB`);
+}
+
+{
+  // Sem dedo cobrindo, a medição precisa recusar em vez de medir a sala.
+  const medidor = new Medidor({ janelaS: 8, modo: 'dedo' });
+  const aleatorio = geradorAleatorio(11);
+  let estado = null;
+  for (let i = 0; i < 300; i++) {
+    estado = medidor.processarQuadro(contextoDeDedo(1, aleatorio, false), 320, 240, i / 30);
+  }
+  verificar('sem dedo na lente a medição é recusada', estado.temPele === false);
+  verificar('sem dedo não há análise', medidor.analisar() === null);
+  verificar('a mensagem orienta cobrir a lente', /cubra a lente/i.test(estado.mensagem));
+}
+
+{
+  const aleatorio = geradorAleatorio(3);
+  const ctx = contextoDeDedo(1.0, aleatorio);
+  const m = medirDedo(ctx, 320, 240);
+  verificar('dedo vermelho é reconhecido como cobrindo a lente', m.cobreALente);
+  const semDedo = medirDedo(contextoDeDedo(1.0, aleatorio, false), 320, 240);
+  verificar('cena cinza não é confundida com dedo', !semDedo.cobreALente);
 }
 
 // ---------------------------------------------------------------------------

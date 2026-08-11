@@ -38,9 +38,10 @@
     <div class="rotulo-secao">
       <span>Captura</span>
       <div class="fonte-troca">
-        <button class="pilula pilula-ativa" id="btnFonteCamera">Câmera</button>
+        <button class="pilula pilula-ativa" id="btnFonteCamera">Rosto</button>
+        <button class="pilula" id="btnFonteDedo" title="Dedo na câmera traseira com o flash ligado">Dedo</button>
         <button class="pilula" id="btnFonteArquivo">Arquivo</button>
-        <button class="pilula" id="btnIluminar" title="Deixa a tela branca para iluminar o rosto">Luz da tela</button>
+        <button class="pilula" id="btnIluminar" title="Deixa a tela branca para iluminar o rosto">Luz</button>
       </div>
     </div>
 
@@ -216,6 +217,28 @@
       intensidade muito maior que a do pulso, e numa frequência que cai dentro
       da banda cardíaca, onde a filtragem não consegue separar. Uma medição
       feita com a testa mal posicionada não tem conserto depois.
+    </p>
+
+    <h2>O modo dedo</h2>
+    <p>
+      Medir pelo rosto é a parte difícil e interessante: o sinal fica entre
+      0,1% e 1% da intensidade, e qualquer variação de iluminação é maior que
+      ele. Com uma câmera que não deixa travar exposição e balanço de branco, a
+      medição pode simplesmente não fechar.
+    </p>
+    <p>
+      O modo dedo resolve por outro caminho. Cobrindo a lente traseira com a
+      ponta do dedo e acendendo a lanterna, a luz <strong>atravessa</strong> o
+      tecido em vez de refletir na superfície, e a variação passa a ser de
+      alguns por cento. É o mesmo princípio do oxímetro que se prende ao dedo,
+      e o sinal fica centenas de vezes mais forte.
+    </p>
+    <p>
+      Aqui não há combinação de canais: usa-se o verde direto. Os métodos
+      cromáticos existem para separar pulso de variação de iluminação, e não há
+      iluminação ambiente para separar, já que a lanterna é fixa e o dedo tapa a
+      lente. O vermelho satura e o azul quase não atravessa o tecido, então
+      combiná-los só acrescentaria ruído.
     </p>
 
     <h2>Os três métodos</h2>
