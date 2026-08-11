@@ -76,18 +76,32 @@ class Captura:
         return float(1.0 / np.median(intervalos)) if intervalos.size else 0.0
 
     def tremor_da_caixa(self) -> tuple[float, float]:
-        """Desvio padrão da posição e do tamanho da caixa do rosto, em pixels.
+        """Movimento da caixa do rosto: tremor quadro a quadro e deriva lenta.
 
-        Tremor alto significa que a região medida muda de lugar entre quadros, e
-        isso entra no sinal como artefato de amplitude muito maior que o pulso.
+        A distinção é essencial e uma versão anterior a ignorava, medindo apenas
+        o desvio padrão da posição ao longo de toda a sessão. Esse número
+        confunde duas coisas de naturezas opostas.
+
+        Alguém que se ajeita devagar na cadeira produz desvio total grande e
+        tremor quadro a quadro nulo, e isso é inofensivo: a região acompanha o
+        rosto sem sobressalto. Já um deslocamento de poucos pixels a cada quadro
+        troca quais pixels entram na média e injeta artefato com amplitude muito
+        maior que a do pulso.
+
+        Numa captura real, o desvio total foi de 48 px e o deslocamento entre
+        quadros teve mediana zero. Reportar apenas o primeiro levou ao
+        diagnóstico errado de que a pessoa estava se mexendo demais.
         """
         if len(self.caixas) < 2:
             return 0.0, 0.0
         matriz = np.asarray(self.caixas, dtype=float)
         centro_x = matriz[:, 0] + matriz[:, 2] / 2
         centro_y = matriz[:, 1] + matriz[:, 3] / 2
-        posicao = float(np.hypot(np.std(centro_x), np.std(centro_y)))
-        return posicao, float(np.std(matriz[:, 2]))
+
+        passo = np.hypot(np.diff(centro_x), np.diff(centro_y))
+        tremor = float(np.percentile(passo, 95)) if passo.size else 0.0
+        deriva = float(np.hypot(np.std(centro_x), np.std(centro_y)))
+        return tremor, deriva
 
 
 def capturar(
@@ -252,10 +266,15 @@ def avaliar_captura(
                     )
                 )
 
-    # Ordena pelo que mais importa numa medição real: consistência entre
-    # janelas. Uma configuração que devolve sempre o mesmo número é mais
-    # confiável que uma com relação sinal-ruído alta e resultado instável.
-    resultados.sort(key=lambda r: (r.dispersao, -r.snr_mediano))
+    # Consistência entre janelas é o que mais importa numa medição real, mas
+    # ordenar só por dispersão coloca no topo quem produziu uma janela só, e
+    # dispersão de uma amostra é zero por definição. Numa captura real isso fez
+    # o relatório recomendar a configuração menos confiável de todas.
+    #
+    # Configurações com poucas janelas vão para o fim da lista. Entre as que
+    # sobrevivem ao critério, aí sim a dispersão decide.
+    minimo = minimo_de_janelas_em(resultados)
+    resultados.sort(key=lambda r: (r.janelas < minimo, r.dispersao, -r.snr_mediano))
     return resultados
 
 
@@ -285,7 +304,7 @@ def gravar_csv(captura: Captura, caminho: str) -> None:
 
 def formatar_relatorio(captura: Captura, resultados: list[Resultado]) -> str:
     """Relatório legível, com o que foi capturado e o que funcionou melhor."""
-    tremor_posicao, tremor_tamanho = captura.tremor_da_caixa()
+    tremor, deriva = captura.tremor_da_caixa()
     aproveitados = captura.total
     perdidos = captura.quadros_sem_rosto
 
@@ -297,8 +316,8 @@ def formatar_relatorio(captura: Captura, resultados: list[Resultado]) -> str:
         f"  Duração:              {captura.instantes[-1] - captura.instantes[0]:.1f} s"
         if aproveitados > 1
         else "  Duração:              0 s",
-        f"  Tremor da caixa:      {tremor_posicao:.1f} px de posição, "
-        f"{tremor_tamanho:.1f} px de tamanho",
+        f"  Tremor entre quadros: {tremor:.1f} px (é o que atrapalha)",
+        f"  Deriva ao longo da sessão: {deriva:.1f} px (inofensiva)",
     ]
 
     for nome in VARIANTES_ROI:
@@ -340,7 +359,8 @@ def formatar_relatorio(captura: Captura, resultados: list[Resultado]) -> str:
         "",
         "LEITURA DO RESULTADO",
         f"  Configuração mais estável: {melhor.rotulo}",
-        f"  Valor: {melhor.bpm_mediano:.0f} bpm, variando {melhor.dispersao:.1f} bpm entre janelas.",
+        f"  Valor: {melhor.bpm_mediano:.0f} bpm, variando {melhor.dispersao:.1f} bpm "
+        f"entre {melhor.janelas} janelas.",
     ]
 
     if melhor.dispersao > 6:
@@ -353,10 +373,43 @@ def formatar_relatorio(captura: Captura, resultados: list[Resultado]) -> str:
     else:
         linhas.append("  Dispersão baixa. O valor é consistente entre janelas.")
 
-    if tremor_posicao > 3.0:
+    # Concordância entre configurações independentes é a evidência mais forte
+    # que existe aqui. Regiões e algoritmos diferentes não têm por que errar
+    # juntos no mesmo valor, mas acertam juntos quando há pulso de verdade.
+    bons = [r for r in resultados[:8] if r.janelas >= minimo_de_janelas_em(resultados)]
+    if len(bons) >= 4:
+        valores = np.asarray([r.bpm_mediano for r in bons])
+        espalhamento = float(np.percentile(valores, 75) - np.percentile(valores, 25))
+        if espalhamento < 6:
+            linhas.append(
+                f"  As melhores configurações concordam entre si (faixa de "
+                f"{espalhamento:.1f} bpm),\n  o que é bom indício de que existe pulso "
+                "de verdade no sinal."
+            )
+        else:
+            linhas.append(
+                f"  As configurações discordam entre si em {espalhamento:.0f} bpm. "
+                "Quando regiões e\n  algoritmos diferentes apontam valores distintos, "
+                "normalmente não há pulso\n  suficiente e cada um está pegando um "
+                "artefato diferente."
+            )
+
+    if melhor.snr_mediano < 0:
         linhas.append(
-            f"  O tremor de {tremor_posicao:.1f} px na caixa do rosto é alto e provavelmente\n"
-            "  está contaminando a medição. Apoie a cabeça em algo firme."
+            f"  A relação sinal-ruído mediana é negativa ({melhor.snr_mediano:.1f} dB):\n"
+            "  há mais energia no resto da banda do que no pico escolhido. Melhorar a\n"
+            "  luz de frente é o que mais muda esse número."
+        )
+
+    if tremor > 4.0:
+        linhas.append(
+            f"  O tremor de {tremor:.1f} px entre quadros é alto e contamina a medição.\n"
+            "  Apoie a cabeça em algo firme."
         )
 
     return "\n".join(linhas)
+
+
+def minimo_de_janelas_em(resultados: list[Resultado]) -> int:
+    """Quantas janelas uma configuração precisa ter para ser levada a sério."""
+    return max(5, int(0.4 * max((r.janelas for r in resultados), default=0)))
