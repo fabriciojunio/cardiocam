@@ -49,6 +49,16 @@ markers = [
 [tool.coverage.run]
 source = ["src/cardiocam"]
 branch = true
+omit = [
+    # Fronteiras com hardware e com o sistema gráfico. Estes três módulos só
+    # executam de verdade com câmera física, tela e servidor gráfico presentes,
+    # nada disso existe na integração contínua, e cobri-los com simulacros
+    # mediria o simulacro e não o código. Ficam de fora da meta em vez de
+    # inflar o número com testes que não provam nada.
+    "src/cardiocam/fontes/webcam.py",
+    "src/cardiocam/fontes/tela.py",
+    "src/cardiocam/ui/app.py",
+]
 
 [tool.coverage.report]
 fail_under = 80

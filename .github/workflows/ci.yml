@@ -12,6 +12,14 @@ jobs:
       fail-fast: false
       matrix:
         python: ["3.10", "3.11", "3.12", "3.13"]
+        include:
+          # A suíte inteira, com os testes de vídeo e a meta de cobertura, roda
+          # numa versão só. Nas outras o objetivo é diferente: confirmar que o
+          # código funciona na versão da linguagem, e para isso o subconjunto
+          # rápido basta. Rodar tudo em quatro versões custava perto de uma hora
+          # de máquina por commit para responder quatro vezes a mesma pergunta.
+          - python: "3.12"
+            completo: true
 
     steps:
       - uses: actions/checkout@v4
@@ -31,8 +39,13 @@ jobs:
       - name: Instalar o projeto
         run: pip install -e ".[dev]"
 
-      - name: Rodar a suíte
+      - name: Rodar a suíte completa com cobertura
+        if: matrix.completo
         run: pytest -n auto --cov=cardiocam --cov-report=term-missing
+
+      - name: Rodar o subconjunto rápido
+        if: ${{ !matrix.completo }}
+        run: pytest -n auto -m "not lento" -p no:cacheprovider
 
   demonstracao:
     runs-on: ubuntu-latest

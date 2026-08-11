@@ -17,6 +17,7 @@ from cardiocam.dominio.erros import RegiaoInvalida
 from cardiocam.dominio.resultado import Falha, Ok, Resultado
 from cardiocam.visao.fundo import media_do_fundo
 from cardiocam.visao.geometria import Retangulo
+from cardiocam.visao.olhos import DetectorOlhos, Olhos, regioes_ancoradas
 from cardiocam.visao.pele import mascara_pele
 from cardiocam.visao.roi import RegiaoInteresse, regioes_de
 
@@ -51,6 +52,7 @@ class ExtratorRGB:
         pixels_minimos: int = PIXELS_MINIMOS,
         medir_fundo: bool = True,
         intervalo_mascara: int = 30,
+        ancorar_nos_olhos: bool = True,
     ) -> None:
         """
         `percentil_descarte` corta os pixels mais claros e mais escuros de cada
@@ -79,10 +81,55 @@ class ExtratorRGB:
         self._selecoes: dict[int, tuple[tuple[int, int], np.ndarray]] = {}
         self._contador = 0
 
+        self.ancorar_nos_olhos = ancorar_nos_olhos
+        self._detector_olhos: DetectorOlhos | None = None
+        if ancorar_nos_olhos:
+            try:
+                self._detector_olhos = DetectorOlhos()
+            except RuntimeError:  # pragma: sem cobertura
+                self._detector_olhos = None
+        self._olhos: Olhos | None = None
+        self.usou_olhos = False
+
     def reiniciar(self) -> None:
         """Esquece as seleções memorizadas. Chamado quando o rosto se perde."""
         self._selecoes.clear()
+        self._olhos = None
         self._contador = 0
+
+    def _regioes_para(
+        self, quadro: np.ndarray, caixa_rosto: Retangulo
+    ) -> list[Retangulo]:
+        """Regiões a medir, ancoradas nos olhos quando possível.
+
+        A posição dos olhos é redetectada de tempos em tempos, e não a cada
+        quadro, por dois motivos: custa caro e oscila. Entre uma detecção e
+        outra, as regiões ficam paradas, o que também ajuda a média a ser sempre
+        sobre os mesmos pixels.
+        """
+        altura, largura = quadro.shape[:2]
+
+        # A âncora nos olhos entrega testa e bochechas. Quando alguém pediu
+        # explicitamente outro conjunto de regiões, essa escolha manda.
+        pode_ancorar = self.regiao is RegiaoInteresse.TESTA_E_BOCHECHAS
+
+        if pode_ancorar and self._detector_olhos is not None:
+            if self._olhos is None or self._contador % (self.intervalo_mascara * 2) == 0:
+                encontrados = self._detector_olhos.detectar(quadro, caixa_rosto)
+                if encontrados is not None:
+                    self._olhos = encontrados
+            if self._olhos is not None:
+                regioes = regioes_ancoradas(self._olhos, largura, altura)
+                if len(regioes) == 3:
+                    self.usou_olhos = True
+                    return regioes
+
+        # Sem olhos confiáveis, cai nas proporções da caixa do rosto.
+        self.usou_olhos = False
+        return [
+            regiao.limitar(largura, altura)
+            for regiao in regioes_de(caixa_rosto, self.regiao)
+        ]
 
     def _selecao_estavel(self, recorte: np.ndarray, indice: int) -> np.ndarray | None:
         """Índice booleano dos pixels a promediar, reaproveitado entre quadros.
@@ -165,12 +212,7 @@ class ExtratorRGB:
         if quadro.ndim != 3 or quadro.shape[2] != 3:
             return Falha(RegiaoInvalida("O quadro precisa ser uma imagem BGR."))
 
-        altura, largura = quadro.shape[:2]
-        regioes = [
-            regiao.limitar(largura, altura)
-            for regiao in regioes_de(caixa_rosto, self.regiao)
-        ]
-        regioes = [regiao for regiao in regioes if not regiao.vazio]
+        regioes = [r for r in self._regioes_para(quadro, caixa_rosto) if not r.vazio]
         if not regioes:
             return Falha(
                 RegiaoInvalida(

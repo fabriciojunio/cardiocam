@@ -192,6 +192,32 @@ html, body {
   border: 1px dashed rgba(230, 233, 231, .45);
   border-radius: 50% / 46%;
 }
+/* Linha dos olhos.
+
+   No navegador não existe detecção de rosto, então as regiões ficam em
+   posições fixas do quadro e é a pessoa que precisa se alinhar. Sem uma
+   referência clara, o enquadramento sai alto ou baixo e a região da testa
+   acaba caindo sobre os olhos. Piscar produz variação de intensidade muito
+   maior que a do pulso, e dentro da banda cardíaca, então esse desalinhamento
+   sozinho arruína a medição. Uma linha para alinhar resolve. */
+.guia-olhos {
+  position: absolute;
+  left: 27%;
+  width: 46%;
+  top: 42.4%;
+  border-top: 1px dashed rgba(200, 153, 74, .85);
+}
+.guia-olhos span {
+  position: absolute;
+  right: 0;
+  top: 4px;
+  font-size: 10px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: rgba(200, 153, 74, .95);
+  white-space: nowrap;
+}
+
 .guia-roi {
   position: absolute;
   border: 1.5px solid var(--verde);

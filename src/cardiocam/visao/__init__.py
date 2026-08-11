@@ -11,6 +11,7 @@ from cardiocam.visao.detector_face import (
 from cardiocam.visao.extrator import AmostraQuadro, ExtratorRGB
 from cardiocam.visao.fundo import media_do_fundo, regioes_de_fundo
 from cardiocam.visao.geometria import Retangulo
+from cardiocam.visao.olhos import DetectorOlhos, Olhos, regioes_ancoradas
 from cardiocam.visao.pele import (
     descartar_extremos,
     mascara_pele,
@@ -26,7 +27,9 @@ __all__ = [
     "DetectorCentral",
     "DetectorFace",
     "DetectorHaar",
+    "DetectorOlhos",
     "DetectorRegiaoFixa",
+    "Olhos",
     "ExtratorRGB",
     "RastreadorRosto",
     "RegiaoInteresse",
@@ -36,6 +39,7 @@ __all__ = [
     "mascara_pele",
     "media_do_fundo",
     "proporcao_de_pele",
+    "regioes_ancoradas",
     "regioes_de",
     "regioes_de_fundo",
 ]

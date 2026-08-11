@@ -301,13 +301,18 @@ def formatar_relatorio(captura: Captura, resultados: list[Resultado]) -> str:
         f"{tremor_tamanho:.1f} px de tamanho",
     ]
 
-    if aproveitados:
-        for nome in VARIANTES_ROI:
-            pixels = captura.pixels_por_variante[nome]
-            linhas.append(
-                f"  Pixels em {nome:18s} {int(np.median(pixels)):6d} "
-                f"(variação {float(np.std(pixels)) / max(1.0, float(np.mean(pixels))) * 100:.1f}%)"
-            )
+    for nome in VARIANTES_ROI:
+        # Uma captura montada à mão, ou interrompida no meio, pode não ter
+        # todas as variantes preenchidas. Faltar dado não é motivo para o
+        # relatório quebrar.
+        pixels = captura.pixels_por_variante.get(nome) or []
+        if not pixels:
+            continue
+        media_pixels = max(1.0, float(np.mean(pixels)))
+        linhas.append(
+            f"  Pixels em {nome:18s} {int(np.median(pixels)):6d} "
+            f"(variação {float(np.std(pixels)) / media_pixels * 100:.1f}%)"
+        )
 
     if not resultados:
         linhas += [
