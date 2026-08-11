@@ -295,6 +295,51 @@ fundo explica todo o sinal do rosto, então não havia pulso ali, e devolver o
 original faria o sistema reportar a interferência como batimento. A trava foi
 retirada, e agora a verificação de sinal degenerado recusa a janela.
 
+## 4.4 Validação em rosto real
+
+A validação contra simulação mede erro com exatidão, mas valida contra o
+modelo. A primeira medição séria em rosto humano mostrou o tamanho dessa
+diferença, e três defeitos vieram à tona.
+
+**A região da testa caía sobre os olhos.** Definir a testa como fração fixa da
+caixa do rosto parecia razoável, mas a caixa devolvida pela cascata depende de
+quanto cabelo a pessoa tem e de onde começa a implantação. Com cabelo volumoso e
+testa curta, a faixa entre 12% e 32% da caixa cai nas sobrancelhas e nos olhos.
+Piscar produz variação de intensidade muito maior que a do pulso, e numa
+frequência dentro da banda cardíaca, onde a filtragem não separa. As regiões
+passaram a ser ancoradas nos olhos detectados, usando a distância entre eles como
+escala do rosto.
+
+**A seleção de pixels era refeita a cada quadro.** Num rosto real, com textura,
+pelos e sombra, os pixels de borda entram e saem da máscara de um quadro para o
+outro por causa do ruído do sensor. Congelar a seleção rendeu 3,7 dB medidos.
+Num rosto sintético de cor uniforme o efeito é invisível, e foi por isso que
+quase dois mil testes não o pegaram: o modelo não tinha a característica que
+causa o problema.
+
+**A métrica de movimento estava errada.** O diagnóstico media o desvio padrão da
+posição da caixa ao longo da sessão inteira e reportou 48 px, sugerindo que a
+pessoa se mexia demais. O deslocamento real entre quadros tinha mediana zero: os
+48 px eram deriva lenta, inofensiva porque a região acompanha o rosto sem
+sobressalto. A conclusão diagnóstica estava invertida.
+
+Uma quarta descoberta veio dos números da captura e não foi corrigível por
+software. O canal verde do rosto varia 5,9% da média, contra 0,1% a 1% esperados
+de um pulso, e o fundo, uma parede estática, varia 3,6%. Parede não pulsa: essa
+variação é o ganho automático da câmera, que nesse modelo não pode ser desligado
+por nenhum dos dois backends do Windows.
+
+Uma tentativa de cancelar esse ganho pela razão entre rosto e fundo, que em
+teoria o elimina exatamente por ser multiplicativo, piorou o resultado: a
+dispersão subiu de 9,4 para 30,4 bpm, porque dividir por uma referência ruidosa
+injeta o ruído dela no sinal. Descartada.
+
+O que funcionou foi aumentar a janela. De 15 para 25 segundos, a dispersão entre
+janelas caiu de 8,7 para 3,2 bpm, e configurações independentes de região e
+algoritmo passaram a convergir na faixa de 66 a 74 bpm. Essa concordância é a
+evidência mais forte disponível sem um oxímetro ao lado: regiões e algoritmos
+diferentes não têm por que errar juntos no mesmo valor.
+
 ## 5. Limitações
 
 - Não é dispositivo médico e não serve para diagnóstico.

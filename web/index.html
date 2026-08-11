@@ -40,6 +40,7 @@
       <div class="fonte-troca">
         <button class="pilula pilula-ativa" id="btnFonteCamera">Câmera</button>
         <button class="pilula" id="btnFonteArquivo">Arquivo</button>
+        <button class="pilula" id="btnIluminar" title="Deixa a tela branca para iluminar o rosto">Luz da tela</button>
       </div>
     </div>
 
@@ -53,6 +54,12 @@
         <div class="guia-roi guia-testa"></div>
         <div class="guia-roi guia-bochecha-e"></div>
         <div class="guia-roi guia-bochecha-d"></div>
+      </div>
+
+      <div class="palco-leitura" id="palcoLeitura" hidden>
+        <output id="bpmPalco">--</output>
+        <span class="palco-unidade">bpm</span>
+        <span class="palco-selo" id="seloPalco"></span>
       </div>
 
       <div class="palco-vazio" id="palcoVazio">
@@ -131,8 +138,9 @@
           <label for="janela">Janela</label>
           <select id="janela">
             <option value="10">10 segundos</option>
-            <option value="15" selected>15 segundos</option>
+            <option value="15">15 segundos</option>
             <option value="20">20 segundos</option>
+            <option value="25" selected>25 segundos</option>
             <option value="30">30 segundos</option>
           </select>
         </div>

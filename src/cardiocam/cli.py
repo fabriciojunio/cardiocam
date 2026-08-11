@@ -271,11 +271,14 @@ def _adicionar_opcoes_analise(analisador: argparse.ArgumentParser) -> None:
         default="pos",
         help="método de extração do pulso (padrão: pos)",
     )
-    # Janela de 15 s em vez de 10: a resolução em frequência melhora e o ruído
-    # é promediado por mais tempo, o que importa muito com webcam modesta. O
-    # custo é a leitura demorar mais para aparecer e reagir mais devagar.
+    # Janela de 25 s, escolhida por medição em rosto real e não por estimativa.
+    # Numa captura de 45 segundos com webcam sem controle de exposição, passar
+    # de 15 para 25 s derrubou a dispersão entre janelas de 8,7 para 3,2 bpm. O
+    # custo é a primeira leitura demorar 25 s para aparecer e a estimativa
+    # reagir mais devagar a uma mudança de frequência, o que é aceitável para
+    # medir alguém em repouso.
     analisador.add_argument(
-        "--janela", type=float, default=15.0, help="tamanho da janela em segundos"
+        "--janela", type=float, default=25.0, help="tamanho da janela em segundos"
     )
     analisador.add_argument(
         "--passo", type=float, default=1.0, help="intervalo entre estimativas"

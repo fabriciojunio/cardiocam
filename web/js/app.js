@@ -41,6 +41,10 @@ const el = {
   btnArquivo: $('btnFonteArquivo'),
   dispositivo: $('dispositivo'),
   campoDispositivo: $('campoDispositivo'),
+  btnIluminar: $('btnIluminar'),
+  palcoLeitura: $('palcoLeitura'),
+  bpmPalco: $('bpmPalco'),
+  seloPalco: $('seloPalco'),
   arquivo: $('arquivoVideo'),
   pessoa: $('pessoa'),
   observacao: $('observacao'),
@@ -78,10 +82,20 @@ function corDaConfianca(nivel) {
 
 function mostrarLeitura(bpm, snrDb, extras = {}) {
   const nivel = confiancaDe(snrDb);
-  el.bpm.textContent = Number.isFinite(bpm) ? bpm.toFixed(0) : '--';
-  el.bpm.className = 'numerao ' + (nivel === 'alta' || nivel === 'média' ? 'viva' : 'duvidosa');
+  const texto = Number.isFinite(bpm) ? bpm.toFixed(0) : '--';
+  const confiavel = nivel === 'alta' || nivel === 'média';
+
+  el.bpm.textContent = texto;
+  el.bpm.className = 'numerao ' + (confiavel ? 'viva' : 'duvidosa');
   el.selo.textContent = nivel;
   el.selo.dataset.nivel = nivel;
+
+  // Cópia sobre o vídeo, para quem está se enquadrando não precisar rolar a
+  // página até o painel.
+  el.palcoLeitura.hidden = false;
+  el.bpmPalco.textContent = texto;
+  el.bpmPalco.className = confiavel ? '' : 'duvidosa';
+  el.seloPalco.textContent = nivel;
   el.snr.textContent = Number.isFinite(snrDb) ? `${snrDb.toFixed(1)} dB` : '—';
   if (extras.janelas !== undefined) el.janelasLidas.textContent = extras.janelas;
   if (extras.dispersao !== undefined) {
@@ -95,6 +109,7 @@ function limparLeitura() {
   el.bpm.className = 'numerao';
   el.selo.textContent = 'aguardando';
   el.selo.dataset.nivel = 'vazio';
+  el.palcoLeitura.hidden = true;
   el.snr.textContent = '—';
   el.janelasLidas.textContent = '—';
   el.dispersao.textContent = '—';
@@ -369,6 +384,51 @@ function pararCamera() {
     fluxo = null;
   }
   el.video.srcObject = null;
+  el.video.removeAttribute('src');
+  // Sem isto o elemento continua exibindo o último quadro recebido, e o aviso
+  // de "câmera ainda não iniciada" aparece por cima de uma imagem congelada.
+  el.video.load();
+  el.palcoLeitura.hidden = true;
+}
+
+/**
+ * Liga uma fonte de luz frontal.
+ *
+ * Tenta primeiro a lanterna do aparelho, que é a melhor luz possível. Ela quase
+ * nunca está disponível aqui: a lanterna fica do mesmo lado da câmera traseira,
+ * e a medição usa a frontal. Quando não dá, a tela assume o papel.
+ *
+ * Deixar a tela branca parece contradizer a escolha de interface escura, e não
+ * contradiz. O problema de uma tela clara seria variar e alterar o que está
+ * sendo medido; uma tela branca fixa é apenas uma lâmpada constante, que é
+ * exatamente o que a medição pede quando o ambiente está mal iluminado ou a luz
+ * vem de trás.
+ */
+async function alternarLuz() {
+  const ligando = !document.body.classList.contains('iluminando');
+
+  const trilha = fluxo?.getVideoTracks?.()[0];
+  if (trilha?.getCapabilities) {
+    try {
+      const capacidades = trilha.getCapabilities();
+      if (capacidades.torch) {
+        await trilha.applyConstraints({ advanced: [{ torch: ligando }] });
+        el.btnIluminar.classList.toggle('pilula-ativa', ligando);
+        dizer(ligando ? 'Lanterna ligada.' : 'Lanterna desligada.');
+        return;
+      }
+    } catch {
+      // Lanterna indisponível é o caso comum; a tela resolve.
+    }
+  }
+
+  document.body.classList.toggle('iluminando', ligando);
+  el.btnIluminar.classList.toggle('pilula-ativa', ligando);
+  dizer(
+    ligando
+      ? 'Tela clara ligada, use-a como luz. Aproxime o rosto e reinicie a medição.'
+      : 'Tela clara desligada.',
+  );
 }
 
 function laco() {
@@ -702,6 +762,7 @@ el.arquivo.addEventListener('change', (evento) => {
 });
 
 el.btnParar.addEventListener('click', parar);
+el.btnIluminar.addEventListener('click', alternarLuz);
 el.btnSalvar.addEventListener('click', salvar);
 el.filtroPessoa.addEventListener('change', atualizarHistorico);
 el.btnExportar.addEventListener('click', baixarCsv);
