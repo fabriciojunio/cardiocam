@@ -185,6 +185,58 @@ def _comando_tela(argumentos: argparse.Namespace) -> int:
     return 0
 
 
+def _comando_diagnostico(argumentos: argparse.Namespace) -> int:
+    from cardiocam.avaliacao.diagnostico import (
+        avaliar_captura,
+        capturar,
+        formatar_relatorio,
+        gravar_csv,
+    )
+
+    if argumentos.arquivo:
+        abertura = abrir_arquivo(argumentos.arquivo)
+    else:
+        abertura = abrir_webcam(indice=argumentos.camera)
+    if abertura.falhou:
+        print(f"Erro: {abertura.erro}", file=sys.stderr)
+        return 1
+
+    print(
+        f"Capturando {argumentos.duracao:.0f} segundos para diagnóstico.\n"
+        "Fique de frente para a câmera, com luz vindo da frente, e o mais parado\n"
+        "possível. Se der, apoie a cabeça em algo firme.\n"
+        "Nenhuma imagem é gravada, apenas médias de cor.\n"
+    )
+
+    ultimo = [-1]
+
+    def progresso(fracao: float) -> None:
+        passo = int(fracao * 10)
+        if passo != ultimo[0]:
+            ultimo[0] = passo
+            print(f"  {fracao * 100:3.0f}%", end="\r", flush=True)
+
+    captura = capturar(abertura.desempacotar(), argumentos.duracao, progresso)
+    print("  100%")
+    print()
+
+    if captura.total < 64:
+        print(
+            "Quadros de menos para diagnosticar. O rosto precisa ficar enquadrado\n"
+            "durante a captura inteira.",
+            file=sys.stderr,
+        )
+        return 1
+
+    resultados = avaliar_captura(captura, janela_s=argumentos.janela)
+    print(formatar_relatorio(captura, resultados))
+
+    if argumentos.saida:
+        gravar_csv(captura, argumentos.saida)
+        print(f"\nSéries gravadas em {argumentos.saida}.")
+    return 0
+
+
 def _comando_avaliar(argumentos: argparse.Namespace) -> int:
     cenarios = cenarios_padrao()
     print(
@@ -292,6 +344,19 @@ def construir_analisador() -> argparse.ArgumentParser:
     tela.add_argument("--fps", type=float, default=30.0)
     _adicionar_opcoes_analise(tela)
     tela.set_defaults(funcao=_comando_tela)
+
+    diagnostico = subcomandos.add_parser(
+        "diagnostico",
+        help="captura uma sessão real e compara configurações sobre os mesmos quadros",
+    )
+    diagnostico.add_argument("--camera", type=int, default=0)
+    diagnostico.add_argument("--arquivo", help="usa um vídeo em vez da câmera")
+    diagnostico.add_argument("--duracao", type=float, default=45.0)
+    diagnostico.add_argument("--janela", type=float, default=15.0)
+    diagnostico.add_argument(
+        "--saida", default="diagnostico.csv", help="onde gravar as séries"
+    )
+    diagnostico.set_defaults(funcao=_comando_diagnostico)
 
     avaliacao = subcomandos.add_parser(
         "avaliar", help="compara os algoritmos e imprime as métricas"
