@@ -63,6 +63,8 @@ let rodando = false;
 let ultimoResultado = null;
 let animacao = null;
 let ultimaAnalise = 0;
+let cancelado = false;
+let abrindo = false;
 
 // --------------------------------------------------------------- utilidades
 function dizer(texto, tipo = '') {
@@ -189,6 +191,38 @@ function desenharEspectro(espectro, bpmMarcado) {
 // -------------------------------------------------------------------- câmera
 const espera = (ms) => new Promise((r) => setTimeout(r, ms));
 
+const PRAZO_POR_TENTATIVA_MS = 6000;
+
+/**
+ * Pede a câmera com prazo.
+ *
+ * `getUserMedia` pode simplesmente nunca responder quando o dispositivo está
+ * num estado ruim, e sem prazo a interface fica presa para sempre esperando uma
+ * promessa que não chega. Se o prazo estourar mas a permissão for concedida
+ * depois, o fluxo que chega atrasado precisa ser encerrado na hora, senão ele
+ * continua segurando a câmera e faz todas as tentativas seguintes falharem.
+ */
+function pedirCamera(restricoes, prazoMs = PRAZO_POR_TENTATIVA_MS) {
+  let desistiu = false;
+  const pedido = navigator.mediaDevices.getUserMedia({ video: restricoes, audio: false });
+
+  pedido
+    .then((atrasado) => {
+      if (desistiu) atrasado.getTracks().forEach((t) => t.stop());
+    })
+    .catch(() => {});
+
+  return Promise.race([
+    pedido,
+    espera(prazoMs).then(() => {
+      desistiu = true;
+      const erro = new Error('A câmera não respondeu a tempo.');
+      erro.name = 'TimeoutError';
+      throw erro;
+    }),
+  ]);
+}
+
 /**
  * Tenta abrir a câmera com exigências cada vez menores.
  *
@@ -220,13 +254,15 @@ async function abrirFluxo(idDispositivo) {
 
   let ultimoErro = null;
   for (let i = 0; i < tentativas.length; i++) {
+    if (cancelado) throw new Error('Medição cancelada.');
     try {
-      return await navigator.mediaDevices.getUserMedia({ video: tentativas[i], audio: false });
+      dizer(`Abrindo a câmera… tentativa ${i + 1} de ${tentativas.length}.`);
+      return await pedirCamera(tentativas[i]);
     } catch (erro) {
       ultimoErro = erro;
       // Permissão negada não melhora afrouxando exigência.
       if (erro?.name === 'NotAllowedError' || erro?.name === 'SecurityError') throw erro;
-      await espera(250);
+      await espera(300);
     }
   }
   throw ultimoErro ?? new Error('Não foi possível abrir a câmera.');
@@ -397,8 +433,14 @@ function laco() {
 }
 
 async function comecar() {
+  if (abrindo) return;
+  abrindo = true;
+  cancelado = false;
   try {
     el.btnIniciar.disabled = true;
+    // O botão de parar precisa funcionar durante a abertura, senão não há como
+    // sair de uma tentativa demorada a não ser recarregando a página.
+    el.btnParar.disabled = false;
     limparLeitura();
     ultimoResultado = null;
     el.btnSalvar.disabled = true;
@@ -414,18 +456,28 @@ async function comecar() {
       el.fps.textContent = `${ajustes.width}x${ajustes.height}`;
     }
 
+    if (cancelado) {
+      pararCamera();
+      dizer('Medição cancelada.');
+      return;
+    }
+
     el.palcoVazio.hidden = true;
     el.guia.classList.add('visivel');
     el.palco.classList.remove('arquivo');
     rodando = true;
     ultimaAnalise = 0;
-    el.btnParar.disabled = false;
     dizer('Encaixe o rosto no contorno e fique parado.');
     laco();
   } catch (erro) {
-    el.btnIniciar.disabled = false;
     pararCamera();
-    dizer(mensagemDeErroDeCamera(erro), 'erro');
+    dizer(cancelado ? 'Medição cancelada.' : mensagemDeErroDeCamera(erro), cancelado ? '' : 'erro');
+  } finally {
+    // Sem isto, qualquer falha durante a abertura deixaria a interface presa
+    // com o botão desabilitado e sem saída a não ser recarregar a página.
+    abrindo = false;
+    el.btnIniciar.disabled = false;
+    el.btnParar.disabled = !rodando;
   }
 }
 
@@ -452,12 +504,20 @@ function mensagemDeErroDeCamera(erro) {
       return 'Esta câmera não aceita nenhuma das resoluções pedidas.';
     case 'AbortError':
       return 'A câmera foi interrompida pelo sistema. Recarregue a página e tente de novo.';
+    case 'TimeoutError':
+      return (
+        'A câmera não respondeu dentro do prazo em nenhuma das tentativas. ' +
+        'Feche a aba, desconecte e reconecte a câmera, e abra a página de novo. ' +
+        'Se persistir, teste em outro navegador para separar problema de driver ' +
+        'de problema do navegador.'
+      );
     default:
       return erro?.message || 'Não foi possível iniciar a câmera.';
   }
 }
 
 function parar() {
+  cancelado = true;
   rodando = false;
   if (animacao) cancelAnimationFrame(animacao);
   pararCamera();
