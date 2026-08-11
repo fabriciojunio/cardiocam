@@ -6,6 +6,9 @@
 <title>Cardiocam — medição de frequência cardíaca por vídeo</title>
 <meta name="description" content="Mede frequência cardíaca a partir de vídeo, sem contato. Processamento local, nenhuma imagem sai do aparelho.">
 <meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#101312">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icone.svg">
 <link rel="stylesheet" href="estilo.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23111413'/><path d='M1 9h3l1.5-4 2 8 2-6 1.5 2h4' stroke='%234ea87a' stroke-width='1.2' fill='none'/></svg>">
 </head>
@@ -60,6 +63,11 @@
     </div>
 
     <p class="estado" id="estado">Pronto para começar.</p>
+
+    <div class="campo" id="campoDispositivo" hidden>
+      <label for="dispositivo">Câmera</label>
+      <select id="dispositivo"></select>
+    </div>
 
     <div class="acoes">
       <button class="botao botao-principal" id="btnIniciar">Iniciar medição</button>

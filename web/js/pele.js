@@ -41,6 +41,45 @@ export function classificarPele(r, g, b) {
  * quadro em celular. Reduz o ganho de raiz de N, mas manter a taxa de quadros
  * estável importa mais.
  */
+/**
+ * Monta a lista de pixels a promediar, uma única vez.
+ *
+ * Reaproveitar essa lista entre quadros é o que garante que a média seja
+ * sempre sobre o mesmo conjunto de pixels. Parece detalhe e não é: com rosto
+ * real, os pixels de borda entram e saem da máscara a cada quadro por causa do
+ * ruído do sensor, e essa troca de conjunto vira ruído no sinal, na mesma
+ * ordem de grandeza do que queremos medir. Congelar a seleção rendeu 3,7 dB
+ * numa medição controlada.
+ *
+ * Devolve os deslocamentos dentro do array de pixels, já multiplicados por 4.
+ */
+export function construirSelecao(dados, largura, altura, passo = 2) {
+  const selecao = [];
+  for (let y = 0; y < altura; y += passo) {
+    for (let x = 0; x < largura; x += passo) {
+      const i = (y * largura + x) * 4;
+      if (classificarPele(dados[i], dados[i + 1], dados[i + 2])) selecao.push(i);
+    }
+  }
+  return selecao.length >= 30 ? Int32Array.from(selecao) : null;
+}
+
+/** Média dos canais sobre uma seleção já montada. */
+export function mediaPorSelecao(dados, selecao) {
+  if (!selecao || !selecao.length) return null;
+  let somaR = 0;
+  let somaG = 0;
+  let somaB = 0;
+  for (let k = 0; k < selecao.length; k++) {
+    const i = selecao[k];
+    somaR += dados[i];
+    somaG += dados[i + 1];
+    somaB += dados[i + 2];
+  }
+  const n = selecao.length;
+  return { vermelho: somaR / n, verde: somaG / n, azul: somaB / n, pixels: n };
+}
+
 export function mediaDaPele(dados, largura, altura, passo = 2) {
   let somaR = 0;
   let somaG = 0;

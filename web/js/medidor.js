@@ -13,7 +13,7 @@
  */
 
 import { desvioPadrao, estimarFrequencia, media, removerReferencia } from './dsp.js';
-import { classificarPele, mediaDaPele } from './pele.js';
+import { classificarPele, construirSelecao, mediaDaPele, mediaPorSelecao } from './pele.js';
 import { extrairPulso } from './rppg.js';
 
 export const BANDA = { minHz: 0.75, maxHz: 3.3 };

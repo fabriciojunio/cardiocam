@@ -39,6 +39,8 @@ const el = {
   btnSalvar: $('btnSalvar'),
   btnCamera: $('btnFonteCamera'),
   btnArquivo: $('btnFonteArquivo'),
+  dispositivo: $('dispositivo'),
+  campoDispositivo: $('campoDispositivo'),
   arquivo: $('arquivoVideo'),
   pessoa: $('pessoa'),
   observacao: $('observacao'),
@@ -185,25 +187,113 @@ function desenharEspectro(espectro, bpmMarcado) {
 }
 
 // -------------------------------------------------------------------- câmera
+const espera = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Tenta abrir a câmera com exigências cada vez menores.
+ *
+ * A primeira tentativa pede a resolução e a taxa ideais para a medição. Muitas
+ * webcams não conseguem entregar essa combinação e falham de formas variadas,
+ * às vezes com o dispositivo chegando a ligar antes de recusar. Em vez de
+ * desistir na primeira negativa, descemos as exigências até o mínimo aceitável,
+ * que é simplesmente "uma câmera qualquer".
+ *
+ * A pausa entre tentativas existe porque o sistema operacional não libera o
+ * dispositivo instantaneamente depois de uma falha, e uma nova tentativa
+ * imediata pega o dispositivo ainda ocupado.
+ */
+async function abrirFluxo(idDispositivo) {
+  const tentativas = [];
+  if (idDispositivo) {
+    tentativas.push({ deviceId: { exact: idDispositivo }, width: { ideal: 640 }, height: { ideal: 480 } });
+    tentativas.push({ deviceId: { exact: idDispositivo } });
+  }
+  tentativas.push({
+    facingMode: 'user',
+    width: { ideal: 640 },
+    height: { ideal: 480 },
+    frameRate: { ideal: 30 },
+  });
+  tentativas.push({ width: { ideal: 640 }, height: { ideal: 480 } });
+  tentativas.push({ facingMode: 'user' });
+  tentativas.push(true);
+
+  let ultimoErro = null;
+  for (let i = 0; i < tentativas.length; i++) {
+    try {
+      return await navigator.mediaDevices.getUserMedia({ video: tentativas[i], audio: false });
+    } catch (erro) {
+      ultimoErro = erro;
+      // Permissão negada não melhora afrouxando exigência.
+      if (erro?.name === 'NotAllowedError' || erro?.name === 'SecurityError') throw erro;
+      await espera(250);
+    }
+  }
+  throw ultimoErro ?? new Error('Não foi possível abrir a câmera.');
+}
+
+async function listarCameras() {
+  try {
+    const dispositivos = await navigator.mediaDevices.enumerateDevices();
+    return dispositivos.filter((d) => d.kind === 'videoinput');
+  } catch {
+    return [];
+  }
+}
+
+async function atualizarListaDeCameras() {
+  const cameras = await listarCameras();
+  if (cameras.length <= 1 || !el.dispositivo) {
+    if (el.campoDispositivo) el.campoDispositivo.hidden = true;
+    return;
+  }
+  const atual = el.dispositivo.value;
+  el.dispositivo.innerHTML = cameras
+    .map((c, i) => `<option value="${c.deviceId}">${c.label || `Câmera ${i + 1}`}</option>`)
+    .join('');
+  if (atual) el.dispositivo.value = atual;
+  el.campoDispositivo.hidden = false;
+}
+
 async function iniciarCamera() {
   if (!navigator.mediaDevices?.getUserMedia) {
     throw new Error(
-      'Este navegador não expõe a câmera. Em celular, use Chrome, Safari ou Firefox atualizados.',
+      'Este navegador não expõe a câmera. Use Chrome, Edge, Safari ou Firefox ' +
+      'atualizados, e um endereço https.',
     );
   }
-  fluxo = await navigator.mediaDevices.getUserMedia({
-    video: {
-      facingMode: 'user',
-      width: { ideal: 640 },
-      height: { ideal: 480 },
-      frameRate: { ideal: 30 },
-    },
-    audio: false,
-  });
+
+  // Garante que nada nosso ainda esteja segurando o dispositivo.
+  pararCamera();
+  await espera(120);
+
+  fluxo = await abrirFluxo(el.dispositivo?.value || null);
   el.video.srcObject = fluxo;
   el.video.muted = true;
+
   await el.video.play();
+
+  // Esperar o primeiro quadro de verdade. O play resolve antes de haver
+  // imagem, e sem isso o laço começaria a medir um vídeo de largura zero.
+  if (!el.video.videoWidth) {
+    await new Promise((resolve, reject) => {
+      const pronto = () => resolve();
+      el.video.addEventListener('loadeddata', pronto, { once: true });
+      setTimeout(
+        () => (el.video.videoWidth ? resolve() : reject(new Error(
+          'A câmera abriu mas não entregou nenhuma imagem. Costuma ser outro ' +
+          'programa usando a câmera ao mesmo tempo.',
+        ))),
+        4000,
+      );
+    });
+  }
+
+  const trilha = fluxo.getVideoTracks()[0];
+  const ajustes = trilha?.getSettings?.() ?? {};
   await travarAjustesAutomaticos();
+  await atualizarListaDeCameras();
+  return ajustes;
 }
 
 /**
@@ -319,7 +409,10 @@ async function comecar() {
     });
 
     dizer('Pedindo acesso à câmera…');
-    await iniciarCamera();
+    const ajustes = await iniciarCamera();
+    if (ajustes?.width) {
+      el.fps.textContent = `${ajustes.width}x${ajustes.height}`;
+    }
 
     el.palcoVazio.hidden = true;
     el.guia.classList.add('visivel');
@@ -331,14 +424,36 @@ async function comecar() {
     laco();
   } catch (erro) {
     el.btnIniciar.disabled = false;
-    const mensagem = erro?.name === 'NotAllowedError'
-      ? 'Acesso à câmera negado. Libere a permissão no navegador e tente de novo.'
-      : erro?.name === 'NotFoundError'
-        ? 'Nenhuma câmera encontrada neste aparelho.'
-        : erro?.name === 'NotReadableError'
-          ? 'A câmera está sendo usada por outro programa. Feche e tente de novo.'
-          : erro.message || 'Não foi possível iniciar a câmera.';
-    dizer(mensagem, 'erro');
+    pararCamera();
+    dizer(mensagemDeErroDeCamera(erro), 'erro');
+  }
+}
+
+/** Traduz a falha em algo que a pessoa consiga resolver. */
+function mensagemDeErroDeCamera(erro) {
+  switch (erro?.name) {
+    case 'NotAllowedError':
+    case 'SecurityError':
+      return (
+        'Acesso à câmera negado. Clique no ícone de câmera na barra de endereço, ' +
+        'permita o acesso e recarregue a página.'
+      );
+    case 'NotFoundError':
+    case 'DevicesNotFoundError':
+      return 'Nenhuma câmera encontrada neste aparelho.';
+    case 'NotReadableError':
+    case 'TrackStartError':
+      return (
+        'A câmera acende mas o navegador não consegue ler dela. Isso quer dizer ' +
+        'que outro programa está com ela aberta: feche o Cardiocam do PowerShell, ' +
+        'o Teams, Meet, Discord, OBS ou o app Câmera do Windows, e recarregue esta página.'
+      );
+    case 'OverconstrainedError':
+      return 'Esta câmera não aceita nenhuma das resoluções pedidas.';
+    case 'AbortError':
+      return 'A câmera foi interrompida pelo sistema. Recarregue a página e tente de novo.';
+    default:
+      return erro?.message || 'Não foi possível iniciar a câmera.';
   }
 }
 

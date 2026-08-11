@@ -230,6 +230,7 @@ class MonitorCardiaco:
         """Zera a medição. Usado quando o rosto se perde por tempo demais."""
         self.janela.limpar()
         self.rastreador.reiniciar()
+        self.extrator.reiniciar()
         self._bpm_suavizado = None
         self._ultima_analise = None
 

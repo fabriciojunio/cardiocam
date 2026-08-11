@@ -1,0 +1,21 @@
+{
+  "name": "Cardiocam",
+  "short_name": "Cardiocam",
+  "description": "Mede frequência cardíaca a partir de vídeo, sem contato. Processamento local.",
+  "lang": "pt-BR",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#101312",
+  "theme_color": "#101312",
+  "categories": ["health", "utilities"],
+  "icons": [
+    {
+      "src": "icone.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

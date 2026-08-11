@@ -19,3 +19,7 @@ saidas/
 # Vercel
 .vercel/
 node_modules/
+
+dist/
+build/
+*.spec
