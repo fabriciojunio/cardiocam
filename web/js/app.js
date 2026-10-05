@@ -7,6 +7,13 @@
 
 import { confiancaDe } from './dsp.js';
 import { Medidor, analisarVideo, BPM_MAXIMO, BPM_MINIMO } from './medidor.js';
+import { RastreadorDeRosto, regioesAncoradas, regioesDeFundo } from './rosto.js';
+import {
+  aoEncerrarCaptura,
+  avaliarCaptura,
+  pedirCapturaDeTela,
+  suportaCapturaDeTela,
+} from './tela.js';
 import {
   baixarCsv,
   limparTudo,
@@ -38,8 +45,13 @@ const el = {
   btnParar: $('btnParar'),
   btnSalvar: $('btnSalvar'),
   btnCamera: $('btnFonteCamera'),
+  btnTela: $('btnFonteTela'),
   btnDedo: $('btnFonteDedo'),
   btnArquivo: $('btnFonteArquivo'),
+  regioes: $('canvasRegioes'),
+  avisoConsentimento: $('avisoConsentimento'),
+  chkConsentimento: $('chkConsentimento'),
+  ressalvaCompressao: $('ressalvaCompressao'),
   dispositivo: $('dispositivo'),
   campoDispositivo: $('campoDispositivo'),
   palcoLeitura: $('palcoLeitura'),
@@ -70,6 +82,32 @@ let ultimaAnalise = 0;
 let cancelado = false;
 let abrindo = false;
 
+/**
+ * Rastreamento de rosto. Instância única, criada uma vez e reaproveitada: o
+ * download do modelo é a parte cara, e refazê-lo a cada medição faria a
+ * primeira leitura demorar sempre.
+ */
+const rastreador = new RastreadorDeRosto();
+let rastreamentoLigado = false;
+let regioesAtuais = null;
+let faixasDeFundoAtuais = null;
+let soltarAvisoDeCaptura = null;
+let plataformaDaCaptura = null;
+
+/**
+ * Carimbo monotônico para o detector.
+ *
+ * `performance.now()` já é monotônico, mas o detector do MediaPipe recusa
+ * carimbo repetido, e dois quadros podem cair no mesmo milissegundo quando a
+ * taxa é alta. Guardar o último e forçar o avanço evita a exceção.
+ */
+let ultimoCarimbo = 0;
+function carimboMonotonico() {
+  const agora = performance.now();
+  ultimoCarimbo = agora > ultimoCarimbo ? agora : ultimoCarimbo + 1;
+  return ultimoCarimbo;
+}
+
 // --------------------------------------------------------------- utilidades
 function dizer(texto, tipo = '') {
   el.estado.textContent = texto;
@@ -96,10 +134,10 @@ function mostrarLeitura(bpm, snrDb, extras = {}) {
   el.bpmPalco.textContent = texto;
   el.bpmPalco.className = confiavel ? '' : 'duvidosa';
   el.seloPalco.textContent = nivel;
-  el.snr.textContent = Number.isFinite(snrDb) ? `${snrDb.toFixed(1)} dB` : '—';
+  el.snr.textContent = Number.isFinite(snrDb) ? `${snrDb.toFixed(1)} dB` : '--';
   if (extras.janelas !== undefined) el.janelasLidas.textContent = extras.janelas;
   if (extras.dispersao !== undefined) {
-    el.dispersao.textContent = Number.isFinite(extras.dispersao) ? `${extras.dispersao.toFixed(2)} bpm` : '—';
+    el.dispersao.textContent = Number.isFinite(extras.dispersao) ? `${extras.dispersao.toFixed(2)} bpm` : '--';
   }
   if (extras.fps !== undefined) el.fps.textContent = `${extras.fps.toFixed(1)} q/s`;
 }
@@ -110,10 +148,10 @@ function limparLeitura() {
   el.selo.textContent = 'aguardando';
   el.selo.dataset.nivel = 'vazio';
   el.palcoLeitura.hidden = true;
-  el.snr.textContent = '—';
-  el.janelasLidas.textContent = '—';
-  el.dispersao.textContent = '—';
-  el.fps.textContent = '—';
+  el.snr.textContent = '--';
+  el.janelasLidas.textContent = '--';
+  el.dispersao.textContent = '--';
+  el.fps.textContent = '--';
   desenharOnda([]);
   desenharEspectro([], null);
   el.barra.style.width = '0%';
@@ -406,6 +444,11 @@ async function travarAjustesAutomaticos() {
 }
 
 function pararCamera() {
+  if (soltarAvisoDeCaptura) {
+    soltarAvisoDeCaptura();
+    soltarAvisoDeCaptura = null;
+  }
+  plataformaDaCaptura = null;
   if (fluxo) {
     fluxo.getTracks().forEach((t) => t.stop());
     fluxo = null;
@@ -416,6 +459,15 @@ function pararCamera() {
   // de "câmera ainda não iniciada" aparece por cima de uma imagem congelada.
   el.video.load();
   el.palcoLeitura.hidden = true;
+
+  // O detector fica carregado de propósito: o modelo já foi baixado e
+  // descartá-lo faria a próxima medição pagar o download de novo. O que é
+  // zerado é o estado de rastreamento, que não vale entre sessões.
+  rastreamentoLigado = false;
+  regioesAtuais = null;
+  faixasDeFundoAtuais = null;
+  rastreador.reiniciar();
+  desenharRegioes(null, null);
 }
 
 /* A opção de deixar a tela branca para iluminar o rosto foi retirada.
@@ -424,6 +476,67 @@ function pararCamera() {
    banda cardíaca continuou igual ou abaixo do ruído de banda larga. Mais luz
    não resolve o que a própria câmera introduz. Manter o botão só daria a
    impressão de que existe um ajuste capaz de salvar a medição. */
+
+/**
+ * Desenha as regiões efetivamente medidas sobre o vídeo.
+ *
+ * Serve a um propósito concreto e não decorativo: sem ver as caixas seguirem o
+ * rosto, "agora você pode se mover" é uma promessa que a tela não confirma. E
+ * quando o rastreamento perde o rosto, a ausência das caixas explica sozinha
+ * por que a medição parou.
+ *
+ * A caixa do rosto é desenhada mais apagada que as regiões porque ela não é
+ * medida: ela só ancora. Mostrar as duas com o mesmo peso daria a entender que
+ * a medição usa o rosto inteiro, inclusive olhos e boca, que são justamente o
+ * que fica de fora.
+ */
+function desenharRegioes(regioes, caixaRosto) {
+  const canvas = el.regioes;
+  if (!canvas) return;
+
+  const largura = el.palco.clientWidth;
+  const altura = el.palco.clientHeight;
+  if (!largura || !altura) return;
+
+  const densidade = Math.min(window.devicePixelRatio || 1, 2);
+  if (canvas.width !== Math.round(largura * densidade)) {
+    canvas.width = Math.round(largura * densidade);
+    canvas.height = Math.round(altura * densidade);
+  }
+
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(densidade, 0, 0, densidade, 0, 0);
+  ctx.clearRect(0, 0, largura, altura);
+
+  if (!regioes || regioes.length === 0) {
+    canvas.classList.remove('visivel');
+    return;
+  }
+  canvas.classList.add('visivel');
+
+  if (caixaRosto) {
+    ctx.strokeStyle = 'rgba(139, 147, 143, 0.45)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(
+      caixaRosto.x * largura,
+      caixaRosto.y * altura,
+      caixaRosto.largura * largura,
+      caixaRosto.altura * altura,
+    );
+  }
+
+  ctx.strokeStyle = 'rgba(78, 168, 122, 0.9)';
+  ctx.lineWidth = 1.5;
+  for (const regiao of regioes) {
+    if (!regiao || regiao.largura <= 0 || regiao.altura <= 0) continue;
+    ctx.strokeRect(
+      regiao.x * largura,
+      regiao.y * altura,
+      regiao.largura * largura,
+      regiao.altura * altura,
+    );
+  }
+}
 
 function laco() {
   if (!rodando) return;
@@ -441,8 +554,30 @@ function laco() {
   const ctx = el.canvas.getContext('2d', { willReadFrequently: true });
   ctx.drawImage(video, 0, 0, largura, altura);
 
+  // Rastreamento antes da medição. Quando ele está disponível, as regiões
+  // acompanham o rosto e a pessoa pode se mover; quando não está, caem nas
+  // posições fixas e o contorno na tela volta a fazer sentido.
+  if (rastreamentoLigado && medidor.modo !== 'dedo') {
+    const caixa = rastreador.atualizar(video, carimboMonotonico());
+    const ancoradas = caixa ? regioesAncoradas(rastreador.olhos) : null;
+    if (ancoradas) {
+      regioesAtuais = ancoradas;
+      faixasDeFundoAtuais = regioesDeFundo(caixa);
+    } else if (rastreador.perdeuORosto) {
+      // Perdeu o rosto de vez: sem regiões, o medidor relata ausência de pele
+      // em vez de continuar medindo um lugar onde o rosto já não está.
+      regioesAtuais = [];
+      faixasDeFundoAtuais = null;
+    }
+    desenharRegioes(regioesAtuais, caixa);
+  }
+
   const agora = performance.now() / 1000;
-  const estado = medidor.processarQuadro(ctx, largura, altura, agora);
+  const estado = rastreamentoLigado && regioesAtuais
+    ? medidor.processarQuadro(
+        ctx, largura, altura, agora, regioesAtuais, faixasDeFundoAtuais || undefined,
+      )
+    : medidor.processarQuadro(ctx, largura, altura, agora);
 
   el.barra.style.width = `${(estado.progresso * 100).toFixed(1)}%`;
   if (!estado.temPele) {
@@ -507,8 +642,55 @@ async function comecar() {
       modo: fonte === 'dedo' ? 'dedo' : 'rosto',
     });
 
-    dizer('Pedindo acesso à câmera…');
-    const ajustes = await iniciarCamera();
+    // O rastreador é carregado em paralelo com a abertura da fonte, e sem
+    // bloquear: a medição começa com o contorno fixo e passa para o modo
+    // automático assim que o modelo estiver pronto. Esperar o download antes de
+    // mostrar a câmera deixaria a tela parada por alguns segundos sem motivo
+    // visível para quem está olhando.
+    rastreamentoLigado = false;
+    regioesAtuais = null;
+    faixasDeFundoAtuais = null;
+    if (fonte !== 'dedo') {
+      rastreador.reiniciar();
+      rastreador.carregar().then((pronto) => {
+        if (!rodando) return;
+        rastreamentoLigado = pronto;
+        if (pronto) {
+          el.guia.classList.remove('visivel');
+          dizer('Rosto sendo acompanhado. Você pode se mover.');
+        }
+      });
+    }
+
+    let ajustes = null;
+    if (fonte === 'tela') {
+      dizer('Escolha a janela da chamada…');
+      const captura = await pedirCapturaDeTela();
+      if (!captura.ok) {
+        dizer(captura.erro, captura.cancelado ? '' : 'erro');
+        return;
+      }
+      fluxo = captura.fluxo;
+      plataformaDaCaptura = captura.plataforma;
+      el.video.srcObject = fluxo;
+      el.video.muted = true;
+      await el.video.play().catch(() => {});
+      ajustes = fluxo.getVideoTracks()[0]?.getSettings?.() || null;
+
+      // Quem encerra o compartilhamento pela barra do navegador não passa pela
+      // nossa interface, e sem isto a página ficaria dizendo que mede um fluxo
+      // que já morreu.
+      soltarAvisoDeCaptura = aoEncerrarCaptura(fluxo, () => {
+        if (rodando) {
+          parar();
+          dizer('O compartilhamento da janela foi encerrado.', 'alerta');
+        }
+      });
+    } else {
+      dizer('Pedindo acesso à câmera…');
+      ajustes = await iniciarCamera();
+    }
+
     if (ajustes?.width) {
       el.fps.textContent = `${ajustes.width}x${ajustes.height}`;
     }
@@ -521,10 +703,21 @@ async function comecar() {
 
     el.palcoVazio.hidden = true;
     el.palco.classList.remove('arquivo');
+    el.palco.classList.toggle('tela', fonte === 'tela');
     rodando = true;
     ultimaAnalise = 0;
 
-    if (fonte === 'dedo') {
+    if (fonte === 'tela') {
+      el.guia.classList.remove('visivel');
+      const qualidade = avaliarCaptura(fluxo, null);
+      const nome = plataformaDaCaptura?.nome;
+      const avisos = qualidade.avisos.join(' ');
+      dizer(
+        (nome ? `Medindo a janela do ${nome}. ` : 'Medindo a janela escolhida. ')
+        + (avisos || 'Deixe o rosto grande na tela.'),
+        qualidade.avisos.length ? 'alerta' : '',
+      );
+    } else if (fonte === 'dedo') {
       el.guia.classList.remove('visivel');
       const acendeu = await ligarLanterna();
       dizer(
@@ -546,8 +739,8 @@ async function comecar() {
     // Sem isto, qualquer falha durante a abertura deixaria a interface presa
     // com o botão desabilitado e sem saída a não ser recarregar a página.
     abrindo = false;
-    el.btnIniciar.disabled = false;
     el.btnParar.disabled = !rodando;
+    atualizarBotaoIniciar();
   }
 }
 
@@ -593,8 +786,10 @@ function parar() {
   pararCamera();
   el.guia.classList.remove('visivel');
   el.palcoVazio.hidden = false;
-  el.btnIniciar.disabled = false;
   el.btnParar.disabled = true;
+  // Pelo estado da fonte, e não direto para falso: na fonte de chamada o botão
+  // continua travado se o consentimento não estiver marcado.
+  atualizarBotaoIniciar();
   const final = medidor?.resultadoFinal();
   dizer(final ? `Medição encerrada: ${final.bpm.toFixed(0)} bpm.` : 'Medição encerrada.');
 }
@@ -745,18 +940,66 @@ document.querySelectorAll('.aba').forEach((aba) => {
 
 function escolherFonte(nova, botaoAtivo, rotuloBotao, mensagem) {
   fonte = nova;
-  [el.btnCamera, el.btnDedo, el.btnArquivo].forEach((b) =>
+  [el.btnCamera, el.btnTela, el.btnDedo, el.btnArquivo].forEach((b) =>
     b.classList.toggle('pilula-ativa', b === botaoAtivo),
   );
   el.btnIniciar.textContent = rotuloBotao;
-  el.palco.classList.remove('arquivo');
+  el.palco.classList.remove('arquivo', 'tela');
   el.campoDispositivo.hidden = nova !== 'camera' || el.dispositivo.options.length <= 1;
+
+  // O consentimento só aparece na fonte que mede outra pessoa.
+  el.avisoConsentimento.hidden = nova !== 'tela';
+  if (nova === 'tela') {
+    el.ressalvaCompressao.textContent = avaliarCaptura(null, null).ressalva;
+  }
+  atualizarBotaoIniciar();
   dizer(mensagem);
 }
+
+/**
+ * Habilita o botão de iniciar conforme a fonte e o consentimento.
+ *
+ * Mantido numa função só porque três lugares diferentes mexem no estado do
+ * botão, e espalhar a regra entre eles é como surge o botão que fica
+ * desabilitado para sempre.
+ */
+function atualizarBotaoIniciar() {
+  // Durante a abertura o botão fica travado de propósito, para não disparar
+  // duas aberturas sobrepostas. Enquanto mede, ele continua ativo: clicar de
+  // novo reinicia a medição, que é comportamento que já existia.
+  if (abrindo) {
+    el.btnIniciar.disabled = true;
+    return;
+  }
+  const faltaConsentir = fonte === 'tela' && !el.chkConsentimento.checked;
+  el.btnIniciar.disabled = faltaConsentir;
+  el.btnIniciar.title = faltaConsentir
+    ? 'Confirme que a pessoa medida sabe e concordou.'
+    : '';
+}
+
+el.chkConsentimento.addEventListener('change', atualizarBotaoIniciar);
 
 el.btnCamera.addEventListener('click', () =>
   escolherFonte('camera', el.btnCamera, 'Iniciar medição', 'Pronto para começar.'),
 );
+
+el.btnTela.addEventListener('click', () => {
+  if (!suportaCapturaDeTela()) {
+    dizer(
+      'Este navegador não permite capturar a tela. No celular é limitação do '
+      + 'sistema: abra esta página no computador.',
+      'alerta',
+    );
+    return;
+  }
+  escolherFonte(
+    'tela',
+    el.btnTela,
+    'Escolher janela',
+    'Abra a chamada, deixe o rosto grande na tela e escolha a janela dela.',
+  );
+});
 
 el.btnDedo.addEventListener('click', () =>
   escolherFonte(
@@ -777,7 +1020,7 @@ el.btnArquivo.addEventListener('click', () =>
 );
 
 el.btnIniciar.addEventListener('click', () => {
-  if (fonte === 'camera') comecar();
+  if (fonte === 'camera' || fonte === 'tela' || fonte === 'dedo') comecar();
   else el.arquivo.click();
 });
 
