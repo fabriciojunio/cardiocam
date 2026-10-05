@@ -104,42 +104,85 @@ export const REGIOES = REGIOES_NA_CAIXA.map((r) => ({
  * rosto, então não têm pulso: o que oscila nelas é a luz do ambiente ou o ganho
  * da câmera se ajustando.
  */
-export const REGIOES_FUNDO = [
-  { x: 0.0, y: 0.0, largura: 0.13, altura: 1.0 },
-  { x: 0.87, y: 0.0, largura: 0.13, altura: 1.0 },
-];
+/*
+  As faixas laterais fixas que ficavam aqui foram removidas.
+
+  Elas eram a referência de iluminação de quando o rosto estava sempre no meio
+  do quadro, preso num contorno. Com o rosto rastreado, a referência passou a
+  ser o quadro inteiro menos a caixa do rosto, que dá milhares de pixels em
+  qualquer enquadramento. Ver `medirFundo`.
+*/
 
 /**
- * Média RGB dos pixels de fundo, descartando qualquer coisa que pareça pele.
- * Se um braço ou outra pessoa entrar na faixa lateral, esses pixels teriam
- * pulso e contaminariam a referência.
+ * Média RGB do fundo: tudo que não é o rosto e não parece pele.
+ *
+ * ## Por que o quadro inteiro, e não duas faixas laterais
+ *
+ * A versão anterior media duas faixas fixas nas bordas, e devolvia `null` com
+ * menos de 100 pixels úteis. Isso se tornou frágil quando o rosto passou a ser
+ * rastreado: as faixas que não encostam no rosto são escolhidas conforme a
+ * posição dele, e com o rosto perto de uma borda sobrava faixa pequena ou
+ * nenhuma.
+ *
+ * E o preço de um `null` é desproporcional. A rectificação exige fundo em
+ * **todas** as amostras da janela, porque interpolar buraco na referência
+ * introduziria justamente o artefato lento que ela existe para remover. Com
+ * janela de 25 segundos a 60 quadros, **um único quadro sem fundo descarta a
+ * correção de 1.500 quadros**, e em silêncio.
+ *
+ * Isso importa muito aqui. Medido na câmera do usuário, o ruído dominante não é
+ * do sensor: com a captura em 1080p reduzida para 320, o ruído de leitura já
+ * está dividido por mais de duzentos, e ainda assim a relação sinal-ruído fica
+ * perto de zero. O que sobra é ruído **correlacionado**, e a maior fonte dele é
+ * o controle automático da câmera, que nem sempre dá para travar. A
+ * rectificação por fundo é precisamente o que cobre esse caso, então deixá-la
+ * cair em silêncio é perder a defesa principal.
+ *
+ * Usar o quadro inteiro menos o rosto dá milhares de pixels em qualquer
+ * enquadramento, e torna o `null` praticamente impossível.
+ *
+ * `caixaRosto` é excluída com margem, porque a borda do rosto tem pele que a
+ * classificação por cor deixa passar, e pele tem pulso: contaminar a referência
+ * com pulso faria a correção remover justamente o que se quer medir.
  */
-export function medirFundo(contexto, largura, altura, passo = 3, faixas = REGIOES_FUNDO) {
+export function medirFundo(contexto, largura, altura, passo = 4, caixaRosto = null) {
   let somaR = 0;
   let somaG = 0;
   let somaB = 0;
   let usados = 0;
 
-  for (const regiao of faixas) {
-    const rx = Math.round(regiao.x * largura);
-    const ry = Math.round(regiao.y * altura);
-    const rl = Math.max(1, Math.round(regiao.largura * largura));
-    const ra = Math.max(1, Math.round(regiao.altura * altura));
-    if (rx + rl > largura || ry + ra > altura) continue;
+  // Retângulo do rosto a excluir, com 15% de margem em cada lado.
+  let ex0 = -1;
+  let ey0 = -1;
+  let ex1 = -1;
+  let ey1 = -1;
+  if (caixaRosto) {
+    const mx = caixaRosto.largura * 0.15;
+    const my = caixaRosto.altura * 0.15;
+    ex0 = Math.floor((caixaRosto.x - mx) * largura);
+    ey0 = Math.floor((caixaRosto.y - my) * altura);
+    ex1 = Math.ceil((caixaRosto.x + caixaRosto.largura + mx) * largura);
+    ey1 = Math.ceil((caixaRosto.y + caixaRosto.altura + my) * altura);
+  }
 
-    const dados = contexto.getImageData(rx, ry, rl, ra).data;
-    for (let y = 0; y < ra; y += passo) {
-      for (let x = 0; x < rl; x += passo) {
-        const i = (y * rl + x) * 4;
-        const r = dados[i];
-        const g = dados[i + 1];
-        const b = dados[i + 2];
-        if (classificarPele(r, g, b)) continue;
-        somaR += r;
-        somaG += g;
-        somaB += b;
-        usados++;
-      }
+  const dados = contexto.getImageData(0, 0, largura, altura).data;
+
+  for (let y = 0; y < altura; y += passo) {
+    const dentroVertical = y >= ey0 && y < ey1;
+    for (let x = 0; x < largura; x += passo) {
+      if (dentroVertical && x >= ex0 && x < ex1) continue;
+
+      const i = (y * largura + x) * 4;
+      const r = dados[i];
+      const g = dados[i + 1];
+      const b = dados[i + 2];
+      // Pele fora da caixa do rosto é pescoço, mão ou outra pessoa, e tem
+      // pulso. Entra como contaminação, não como referência.
+      if (classificarPele(r, g, b)) continue;
+      somaR += r;
+      somaG += g;
+      somaB += b;
+      usados++;
     }
   }
 
@@ -238,6 +281,7 @@ export class Medidor {
     this.inicio = null;
     this.espectroMedio = null;
     this.frequenciasDoEspectro = null;
+    this.quadrosSemFundo = 0;
   }
 
   get duracaoAcumulada() {
@@ -308,7 +352,7 @@ export class Medidor {
     altura,
     instanteS,
     regioes = REGIOES,
-    faixasDeFundo = REGIOES_FUNDO,
+    caixaRosto = null,
   ) {
     if (this.inicio === null) this.inicio = instanteS;
 
@@ -361,8 +405,9 @@ export class Medidor {
 
     this.quadrosSemPele = 0;
     const fundo = this.usarFundo
-      ? medirFundo(contexto, largura, altura, 3, faixasDeFundo)
+      ? medirFundo(contexto, largura, altura, 4, caixaRosto)
       : null;
+    if (!fundo) this.quadrosSemFundo += 1;
     this.amostras.push({
       t: instanteS,
       r: somaR / pesoTotal,
@@ -468,7 +513,14 @@ export class Medidor {
     // A rectificação vem antes do algoritmo de propósito: o balanço de branco
     // automático age sobre cada canal separadamente, então é aí que a correção
     // pertence. Depois da combinação cromática já não há como desfazer.
-    if (this.usarFundo && this.amostras.every((a) => a.fundo)) {
+    // A rectificação exige fundo em **todas** as amostras da janela, porque
+    // interpolar buraco na referência introduziria o artefato lento que ela
+    // existe para remover. O custo de um buraco é alto, e por isso o resultado
+    // passou a dizer se ela foi aplicada: antes, uma janela sem correção era
+    // indistinguível de uma com, e a diferença entre as duas foi medida em
+    // 1 acerto em 16 contra 16 em 16 sob balanço de branco oscilante.
+    this.fundoAplicado = this.usarFundo && this.amostras.every((a) => a.fundo);
+    if (this.fundoAplicado) {
       serie = rectificarPeloFundo(serie, {
         vermelho: this.amostras.map((a) => a.fundo.vermelho),
         verde: this.amostras.map((a) => a.fundo.verde),
@@ -503,6 +555,8 @@ export class Medidor {
       fps,
       duracaoS: this.duracaoAcumulada,
       janelas: this.historico.length,
+      fundoAplicado: this.fundoAplicado,
+      quadrosSemFundo: this.quadrosSemFundo,
     };
     return this.ultimaAnalise;
   }

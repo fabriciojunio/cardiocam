@@ -126,11 +126,22 @@ for (const caso of indice) {
     cinza.length === caso.largura * caso.altura,
     `${cinza.length} bytes para ${caso.largura}x${caso.altura}`);
 
-  const inicio = Date.now();
   // Padrões do módulo, de propósito: o teste precisa exercitar o que o
   // aplicativo usa, e não uma configuração escolhida para passar.
-  const achados = detectar(modelo, cinza, caso.largura, caso.altura);
-  const duracao = Date.now() - inicio;
+  //
+  // Mediana de três execuções, e não uma. Uma medição isolada de tempo numa
+  // máquina que está fazendo outra coisa é ruído, e esse ruído já reprovou o
+  // teste uma vez por 27 ms sem nada ter piorado. Teste que falha por acaso
+  // treina quem o lê a ignorá-lo.
+  const tempos = [];
+  let achados = [];
+  for (let i = 0; i < 3; i++) {
+    const inicio = Date.now();
+    achados = detectar(modelo, cinza, caso.largura, caso.altura);
+    tempos.push(Date.now() - inicio);
+  }
+  tempos.sort((a, b) => a - b);
+  const duracao = tempos[1];
 
   process.stdout.write(
     `  ${caso.nome}: ${achados.length} rosto(s) em ${duracao} ms, `

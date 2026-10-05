@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Testes do processamento de sinais no navegador.
  *
  * Rodam em Node com `npm test`, sem navegador e sem dependências. A estratégia
@@ -26,7 +26,6 @@ import { Medidor, medirDedo, rectificarPeloFundo } from '../js/medidor.js';
 import {
   REGIOES_NA_CAIXA,
   regioesDaCaixa,
-  regioesDeFundo,
   saltoAbsurdo,
 } from '../js/rosto.js';
 import { avaliarCaptura, identificarPlataforma, LIMIARES } from '../js/tela.js';
@@ -928,7 +927,7 @@ for (const amplitudeDoMovimento of [0, 0.25]) {
 
     medidor.processarQuadro(
       contexto, largura, altura, tempos[i],
-      regioes || [], regioesDeFundo(caixa),
+      regioes || [], caixa,
     );
   }
 
@@ -992,47 +991,6 @@ for (const amplitudeDoMovimento of [0, 0.25]) {
     analise
       ? `erro de ${erroComRegiaoParada.toFixed(1)} bpm, esperado acima de 3`
       : 'nenhuma medida, o que também confirma a degradação');
-}
-
-// ---------------------------------------------------------------------------
-grupo('Faixas de fundo que fogem do rosto');
-
-{
-  /* O fundo serve de referência de iluminação, e só vale se não tiver pulso.
-     Faixa fixa em cima do rosto conteria pele, e aí a correção injetaria o
-     sinal que deveria remover. */
-  const centro = { x: 0.35, y: 0.2, largura: 0.3, altura: 0.6 };
-  const faixas = regioesDeFundo(centro);
-  verificar('rosto no centro deixa as duas faixas laterais', faixas.length === 2);
-  verificar('nenhuma faixa encosta no rosto',
-    faixas.every((f) => f.x + f.largura <= centro.x || f.x >= centro.x + centro.largura));
-
-  const naEsquerda = { x: 0.02, y: 0.2, largura: 0.4, altura: 0.6 };
-  const faixasDireita = regioesDeFundo(naEsquerda);
-  verificar('rosto à esquerda deixa só a faixa da direita',
-    faixasDireita.length === 1 && faixasDireita[0].x > 0.5);
-
-  const naDireita = { x: 0.58, y: 0.2, largura: 0.4, altura: 0.6 };
-  const faixasEsquerda = regioesDeFundo(naDireita);
-  verificar('rosto à direita deixa só a faixa da esquerda',
-    faixasEsquerda.length === 1 && faixasEsquerda[0].x === 0);
-
-  /* Rosto ocupando a largura inteira, que é o caso de quem chega muito perto
-     da câmera. Sobra a faixa de cima, acima da testa. */
-  const larguraToda = { x: 0.0, y: 0.25, largura: 1.0, altura: 0.7 };
-  const faixaDeCima = regioesDeFundo(larguraToda);
-  verificar('rosto ocupando a largura inteira usa a faixa de cima',
-    faixaDeCima.length === 1 && faixaDeCima[0].altura <= 0.1);
-
-  /* Rosto ocupando o quadro todo: não há fundo utilizável, e devolver faixa
-     nenhuma é a resposta certa. O medidor então mede sem rectificação, em vez
-     de rectificar por uma referência que é pele. */
-  const quadroTodo = { x: 0, y: 0, largura: 1, altura: 1 };
-  verificar('sem fundo utilizável devolve lista vazia',
-    regioesDeFundo(quadroTodo).length === 0);
-
-  verificar('sem rosto rastreado cai nas duas faixas fixas',
-    regioesDeFundo(null).length === 2);
 }
 
 // ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Amarra a interface ao medidor.
  *
  * Nenhuma lógica de sinal mora aqui: este arquivo só liga botões, desenha os
@@ -8,7 +8,7 @@
 import { confiancaDe } from './dsp.js';
 import { Medidor, analisarVideo, BPM_MAXIMO, BPM_MINIMO } from './medidor.js';
 import { carregarModelo } from './cascata.js';
-import { RastreadorDeRosto, regioesDeFundo } from './rosto.js';
+import { RastreadorDeRosto } from './rosto.js';
 import {
   aoEncerrarCaptura,
   avaliarCaptura,
@@ -95,7 +95,7 @@ let modeloDaCascata = null;
 let carregandoModelo = null;
 let rastreamentoLigado = false;
 let regioesAtuais = null;
-let faixasDeFundoAtuais = null;
+let caixaDoRosto = null;
 let soltarAvisoDeCaptura = null;
 let plataformaDaCaptura = null;
 
@@ -807,7 +807,7 @@ function pararCamera() {
   // zerado é o estado de rastreamento, que não vale entre sessões.
   rastreamentoLigado = false;
   regioesAtuais = null;
-  faixasDeFundoAtuais = null;
+  caixaDoRosto = null;
   rastreador.reiniciar();
 }
 
@@ -859,14 +859,12 @@ function laco() {
       const regioes = caixa ? rastreador.regioes() : null;
       if (regioes) {
         regioesAtuais = regioes;
-        faixasDeFundoAtuais = regioesDeFundo(caixa);
+        caixaDoRosto = caixa;
       } else if (rastreador.perdeuORosto) {
         // Perdeu o rosto de vez. Lista vazia faz o medidor relatar ausência de
         // pele, em vez de seguir medindo um lugar onde o rosto já não está.
         regioesAtuais = [];
-        faixasDeFundoAtuais = null;
-        // E o contorno volta, para a pessoa ter o que fazer: encaixar o rosto
-        // nele é a saída quando o detector não acha.
+        caixaDoRosto = null;
       }
     }
   }
@@ -877,9 +875,7 @@ function laco() {
 
   const agora = performance.now() / 1000;
   const estado = rastreamentoLigado && regioesAtuais
-    ? medidor.processarQuadro(
-        ctx, largura, altura, agora, regioesAtuais, faixasDeFundoAtuais || undefined,
-      )
+    ? medidor.processarQuadro(ctx, largura, altura, agora, regioesAtuais, caixaDoRosto)
     : medidor.processarQuadro(ctx, largura, altura, agora);
 
   el.barra.style.width = `${(estado.progresso * 100).toFixed(1)}%`;
@@ -931,7 +927,27 @@ function laco() {
           já é a faixa em que a promediação resolve com folga.
         */
         const luz = medidor.luminanciaMedia;
-        if (Number.isFinite(luz) && luz < 60) {
+        if (analise.fundoAplicado === false) {
+          /*
+            A correção por fundo mede a perturbação de iluminação numa parte do
+            quadro que não tem pulso, e a remove do sinal do rosto. Ela é a
+            defesa principal contra o controle automático da câmera, que é a
+            maior fonte de ruído correlacionado quando não dá para travá-lo:
+            medido, ela levou os acertos de 1 em 16 para 16 em 16 sob balanço de
+            branco oscilando.
+
+            Ela exige referência em todos os quadros da janela, porque
+            interpolar buraco introduziria o artefato lento que ela remove.
+            Quando cai, é a causa mais provável de sinal ruim, e antes caía em
+            silêncio.
+          */
+          dizer(
+            'Sinal fraco, e a correção de iluminação está desligada porque o '
+            + 'fundo não pôde ser medido em todos os quadros. Deixe algum fundo '
+            + 'visível ao redor do rosto, afastando-se um pouco da câmera.',
+            'alerta',
+          );
+        } else if (Number.isFinite(luz) && luz < 60) {
           dizer(
             `Sinal fraco, e a causa mais provável é luz: a pele está medindo `
             + `${luz.toFixed(0)} de 255 de luminância. Abaixo de 60 o pulso fica `
@@ -972,7 +988,7 @@ async function comecar() {
 
     // No modo dedo não há rosto: o que está na frente da lente é o dedo.
     regioesAtuais = null;
-    faixasDeFundoAtuais = null;
+    caixaDoRosto = null;
     ultimaLocalizacao = 0;
     rastreador.reiniciar();
     rastreamentoLigado = fonte !== 'dedo';
