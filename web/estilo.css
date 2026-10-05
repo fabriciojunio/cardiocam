@@ -226,28 +226,6 @@ html, body {
 .palco-vazio p { margin: 0; }
 .fraco { color: var(--texto-apagado); font-size: 12px; }
 
-/*
-  Sobreposição das regiões medidas, desenhada por código quando o rastreamento
-  de rosto está ativo.
-
-  Espelhada junto com o vídeo: a imagem da câmera frontal é invertida para
-  parecer um espelho, e sem a mesma inversão aqui as caixas apareceriam do lado
-  errado do rosto. O modo arquivo e o modo chamada não invertem, pela mesma
-  regra que vale para o vídeo.
-*/
-.sobreposicao {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-  transform: scaleX(-1);
-  opacity: 0;
-  transition: opacity .2s;
-}
-.sobreposicao.visivel { opacity: 1; }
-.palco.arquivo .sobreposicao,
-.palco.tela .sobreposicao { transform: none; }
 
 /*
   Bloco de consentimento da fonte "Chamada".
@@ -291,56 +269,6 @@ html, body {
   accent-color: var(--ambar);
 }
 
-/* Contorno onde o rosto deve ficar, com as regiões efetivamente medidas */
-.guia { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .2s; }
-.guia.visivel { opacity: 1; }
-.guia-oval {
-  position: absolute;
-  left: 50%; top: 50%;
-  transform: translate(-50%, -50%);
-  width: 46%;
-  height: 76%;
-  border: 1px dashed rgba(230, 233, 231, .45);
-  border-radius: 50% / 46%;
-}
-/* Linha dos olhos.
-
-   No navegador não existe detecção de rosto, então as regiões ficam em
-   posições fixas do quadro e é a pessoa que precisa se alinhar. Sem uma
-   referência clara, o enquadramento sai alto ou baixo e a região da testa
-   acaba caindo sobre os olhos. Piscar produz variação de intensidade muito
-   maior que a do pulso, e dentro da banda cardíaca, então esse desalinhamento
-   sozinho arruína a medição. Uma linha para alinhar resolve. */
-.guia-olhos {
-  position: absolute;
-  left: 27%;
-  width: 46%;
-  top: 42.4%;
-  border-top: 1px dashed rgba(200, 153, 74, .85);
-}
-.guia-olhos span {
-  position: absolute;
-  right: 0;
-  top: 4px;
-  font-size: 10px;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-  color: rgba(200, 153, 74, .95);
-  white-space: nowrap;
-}
-
-.guia-roi {
-  position: absolute;
-  border: 1.5px solid var(--verde);
-  background: rgba(78, 168, 122, .07);
-}
-/* Espelham exatamente as REGIOES calculadas em medidor.js, para que o usuário
-   veja onde a medição realmente acontece. Caixa do rosto em 27%/12% com 46% de
-   largura e 76% de altura; as sub-regiões saem das mesmas frações usadas na
-   versão em Python. */
-.guia-testa       { left: 38.04%; top: 21.12%; width: 23.92%; height: 15.20%; }
-.guia-bochecha-e  { left: 30.68%; top: 50.00%; width: 13.80%; height: 22.80%; }
-.guia-bochecha-d  { left: 55.52%; top: 50.00%; width: 13.80%; height: 22.80%; }
 
 .barra-progresso {
   position: absolute;
