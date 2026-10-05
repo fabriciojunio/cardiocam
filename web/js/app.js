@@ -7,6 +7,7 @@
 
 import { confiancaDe } from './dsp.js';
 import { Medidor, analisarVideo, BPM_MAXIMO, BPM_MINIMO } from './medidor.js';
+import { carregarModelo } from './cascata.js';
 import { RastreadorDeRosto, regioesDeFundo } from './rosto.js';
 import {
   aoEncerrarCaptura,
@@ -48,6 +49,7 @@ const el = {
   btnTela: $('btnFonteTela'),
   btnDedo: $('btnFonteDedo'),
   btnArquivo: $('btnFonteArquivo'),
+  resolucao: $('dadoResolucao'),
   regioes: $('canvasRegioes'),
   avisoConsentimento: $('avisoConsentimento'),
   chkConsentimento: $('chkConsentimento'),
@@ -85,8 +87,14 @@ let abrindo = false;
 /**
  * Rastreamento de rosto. Instância única, porque ela guarda o estado temporal
  * da suavização, que é o que impede a caixa de tremer entre quadros.
+ *
+ * O modelo da cascata é carregado uma vez, sob demanda, e fica guardado: são
+ * 148 KB de JSON do próprio site, e rebaixá-lo a cada medição faria a primeira
+ * leitura demorar sempre.
  */
-const rastreador = new RastreadorDeRosto();
+let rastreador = new RastreadorDeRosto(null);
+let modeloDaCascata = null;
+let carregandoModelo = null;
 let rastreamentoLigado = false;
 let regioesAtuais = null;
 let faixasDeFundoAtuais = null;
@@ -94,16 +102,166 @@ let soltarAvisoDeCaptura = null;
 let plataformaDaCaptura = null;
 
 /**
- * De quantos em quantos quadros o rosto é localizado de novo.
+ * Intervalo entre localizações do rosto, em milissegundos.
  *
- * Localizar custa um histograma sobre o quadro reduzido, que é barato, mas não
- * de graça em celular. Em 33 ms um rosto humano praticamente não sai do lugar,
- * então localizar a cada dois quadros divide o custo pela metade sem prejuízo
- * perceptível. É a mesma decisão da versão em Python, que roda o detector a
- * cada dois quadros pelo mesmo motivo.
+ * **Não é por quadro, é por tempo**, e a diferença importa. A detecção em
+ * cascata custa cerca de 200 ms no quadro de 320 pixels, medido. Amarrá-la à
+ * contagem de quadros faria o custo subir junto com a taxa da câmera, que é o
+ * oposto do desejado: quanto mais fluida a captura, mais o detector atrapalha.
+ *
+ * 500 ms é folgado para seguir alguém sentado conversando, e deixa a caixa
+ * suavizada valendo entre uma localização e outra. O resultado é cerca de 40%
+ * de um núcleo durante a medição, contra 100% se rodasse a cada quadro.
  */
-const INTERVALO_DE_LOCALIZACAO = 2;
-let contadorDeQuadros = 0;
+const INTERVALO_DE_LOCALIZACAO_MS = 500;
+let ultimaLocalizacao = 0;
+
+/**
+ * Garante o modelo carregado, sem bloquear o início da medição.
+ *
+ * A medição começa sem rastreamento, com o contorno oval, e passa para o modo
+ * automático quando o modelo chega. Esperar o download antes de mostrar a
+ * câmera deixaria a tela parada por um motivo que quem está olhando não vê.
+ */
+function garantirModelo() {
+  if (modeloDaCascata) return Promise.resolve(modeloDaCascata);
+  if (carregandoModelo) return carregandoModelo;
+
+  carregandoModelo = carregarModelo()
+    .then((modelo) => {
+      modeloDaCascata = modelo;
+      rastreador = new RastreadorDeRosto(modelo);
+      return modelo;
+    })
+    .catch((erro) => {
+      // Sem modelo a página continua medindo pelo contorno fixo. Página que
+      // deixa de funcionar porque um arquivo não baixou é pior que página com
+      // modo manual.
+      carregandoModelo = null;
+      console.warn('rastreamento indisponível:', erro?.message || erro);
+      return null;
+    });
+
+  return carregandoModelo;
+}
+
+/**
+ * Degraus de qualidade, do melhor para o pior.
+ *
+ * A escolha é automática e medida, não configurável, e a razão é que a resposta
+ * certa depende da câmera **e** da máquina, que o usuário não tem como saber.
+ *
+ * Pedia 640x480 fixo, e isso jogava fora sinal de graça em qualquer câmera
+ * decente. O raciocínio: o processamento reduz o quadro para uma largura fixa
+ * antes de medir, e **reduzir é promediar**. Capturar em 1920 e reduzir para
+ * 320 faz cada pixel processado ser a média de 36 pixels do sensor, o que
+ * divide o ruído de leitura por seis antes de qualquer algoritmo agir.
+ *
+ * O teto é 1920 e não 4K de propósito, e isso é decisão de engenharia e não
+ * limitação: acima de 1080p o ganho de promediação cresce devagar, enquanto o
+ * custo de decodificar e redimensionar cada quadro cresce rápido. E aqui
+ * **taxa de quadros estável vale mais que resolução**, porque a estimativa é
+ * de frequência: quadro perdido vira irregularidade na amostragem, que é
+ * exatamente o que mais atrapalha a análise espectral. Trocar ruído de sensor
+ * por instabilidade de amostragem seria trocar um problema tratável por um
+ * pior.
+ *
+ * `ideal` e não `exact`: câmera que não entrega a resolução entrega a mais
+ * próxima, em vez de recusar a abertura.
+ */
+const DEGRAUS_DE_QUALIDADE = Object.freeze([
+  { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
+  { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+  { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } },
+]);
+
+/** O degrau em uso. Começa no melhor e desce sozinho se a máquina não aguentar. */
+let degrauAtual = 0;
+
+/**
+ * Taxa de quadros abaixo da qual vale descer um degrau.
+ *
+ * 20 por segundo é folgado para a banda cardíaca, que vai a 3,3 Hz: o limite
+ * de Nyquist pediria 6,6. O valor não está aqui por causa de Nyquist, e sim
+ * porque taxa abaixo disso costuma significar que a máquina está perdendo
+ * quadros, e quadro perdido é amostra faltando em instante irregular.
+ */
+const QUADROS_MINIMOS_ACEITAVEIS = 20;
+
+/**
+ * Quadros processados antes de julgar o desempenho.
+ *
+ * Os primeiros quadros depois de abrir a câmera são sempre irregulares:
+ * exposição se acomodando, buffer enchendo, o navegador alocando textura.
+ * Julgar ali reprovaria uma configuração boa por causa do aquecimento. Cinco
+ * segundos a 30 por segundo dão amostra suficiente para a mediana significar
+ * algo.
+ */
+const QUADROS_ANTES_DE_JULGAR = 150;
+let quadrosParaAvaliarDesempenho = 0;
+let jaAvaliouDesempenho = false;
+
+/**
+ * Desce um degrau de qualidade e reabre, quando a máquina não sustenta.
+ *
+ * Automático de propósito. A resposta certa depende da câmera e da máquina
+ * juntas, e nenhuma das duas o usuário tem como avaliar olhando. Pedir que ele
+ * escolha entre "1080p" e "720p" seria transferir para ele uma decisão que o
+ * programa pode medir.
+ */
+async function descerDegrauSeNecessario() {
+  if (jaAvaliouDesempenho || !rodando || !medidor) return;
+
+  quadrosParaAvaliarDesempenho += 1;
+  if (quadrosParaAvaliarDesempenho < QUADROS_ANTES_DE_JULGAR) return;
+
+  jaAvaliouDesempenho = true;
+  const entregue = medidor.fpsEfetivo;
+  if (entregue >= QUADROS_MINIMOS_ACEITAVEIS) return;
+  if (degrauAtual >= DEGRAUS_DE_QUALIDADE.length - 1) {
+    dizer(
+      `A captura está em ${entregue.toFixed(0)} quadros por segundo, que é `
+      + 'pouco, e já estou na menor resolução. Feche abas e programas pesados.',
+      'alerta',
+    );
+    return;
+  }
+
+  degrauAtual += 1;
+  const alvo = DEGRAUS_DE_QUALIDADE[degrauAtual];
+  dizer(
+    `A máquina entregou ${entregue.toFixed(0)} quadros por segundo nesta `
+    + `resolução. Baixando para ${alvo.width.ideal}x${alvo.height.ideal} e `
+    + 'recomeçando, porque taxa de quadros estável vale mais que resolução.',
+    'alerta',
+  );
+  parar();
+  await espera(400);
+  comecar();
+}
+
+/**
+ * Nomes que denunciam câmera virtual.
+ *
+ * Câmera virtual não é um sensor: é um programa que entrega quadros, quase
+ * sempre depois de processá-los. Enquadramento automático, desfoque de fundo,
+ * suavização de pele e correção de cor são exatamente as operações que apagam
+ * a variação de 0,1% a 1% de intensidade que carrega o pulso. Medir através de
+ * uma delas é medir o resultado do filtro, não a pessoa.
+ *
+ * Isto saiu de um caso real: a página abriu a "EMEET STUDIO Virtual Camera" e
+ * recebeu o logo de espera do programa, sem imagem nenhuma, e mesmo quando
+ * havia imagem a relação sinal-ruído ficou em -4,8 dB com 42 bpm de dispersão
+ * entre janelas, isto é, ruído puro.
+ *
+ * A lista cobre o que é comum; a palavra "virtual" sozinha pega o resto.
+ */
+const PADRAO_DE_CAMERA_VIRTUAL =
+  /virtual|obs|nvidia broadcast|xsplit|snap camera|manycam|droidcam|iriun|epoccam|logi tune|streamlabs|camo/i;
+
+function pareceCameraVirtual(rotulo) {
+  return PADRAO_DE_CAMERA_VIRTUAL.test(String(rotulo || ''));
+}
 
 // --------------------------------------------------------------- utilidades
 function dizer(texto, tipo = '') {
@@ -149,6 +307,7 @@ function limparLeitura() {
   el.janelasLidas.textContent = '--';
   el.dispersao.textContent = '--';
   el.fps.textContent = '--';
+  el.resolucao.textContent = '--';
   desenharOnda([]);
   desenharEspectro([], null);
   el.barra.style.width = '0%';
@@ -298,17 +457,22 @@ async function abrirFluxo(idDispositivo) {
     return await primeiraQueAbrir(tentativas);
   }
 
+  // Do degrau atual para baixo: se a máquina já se mostrou incapaz de
+  // sustentar 1080p numa tentativa anterior, não adianta insistir nele.
+  const degraus = DEGRAUS_DE_QUALIDADE.slice(degrauAtual);
+
   if (idDispositivo) {
-    tentativas.push({ deviceId: { exact: idDispositivo }, width: { ideal: 640 }, height: { ideal: 480 } });
+    for (const degrau of degraus) {
+      tentativas.push({ deviceId: { exact: idDispositivo }, ...degrau });
+    }
     tentativas.push({ deviceId: { exact: idDispositivo } });
   }
-  tentativas.push({
-    facingMode: 'user',
-    width: { ideal: 640 },
-    height: { ideal: 480 },
-    frameRate: { ideal: 30 },
-  });
-  tentativas.push({ width: { ideal: 640 }, height: { ideal: 480 } });
+  for (const degrau of degraus) {
+    tentativas.push({ facingMode: 'user', ...degrau });
+  }
+  for (const degrau of degraus) {
+    tentativas.push(degrau);
+  }
   tentativas.push({ facingMode: 'user' });
   tentativas.push(true);
 
@@ -417,16 +581,61 @@ async function atualizarListaDeCameras() {
     return;
   }
 
+  // Câmera de verdade primeiro, virtual depois. A ordem do seletor é a ordem
+  // em que o navegador devolveu, e numa máquina com programa de câmera
+  // instalado a virtual costuma vir antes da real. Como a primeira da lista é
+  // a que o navegador também escolhe por padrão, isso faz a medição começar
+  // justamente pela câmera que não serve.
+  const ordenadas = [...cameras].sort((a, b) => {
+    const va = pareceCameraVirtual(a.label) ? 1 : 0;
+    const vb = pareceCameraVirtual(b.label) ? 1 : 0;
+    return va - vb;
+  });
+
   const atual = el.dispositivo.value;
-  el.dispositivo.innerHTML = cameras
-    .map((c, i) => `<option value="${escaparHtml(c.deviceId)}">${escaparHtml(c.label || `Câmera ${i + 1}`)}</option>`)
+  el.dispositivo.innerHTML = ordenadas
+    .map((c, i) => {
+      const nome = c.label || `Câmera ${i + 1}`;
+      const marca = pareceCameraVirtual(c.label) ? ' (virtual, não recomendada)' : '';
+      return `<option value="${escaparHtml(c.deviceId)}">${escaparHtml(nome + marca)}</option>`;
+    })
     .join('');
+
   // Só restaura a escolha anterior se ela ainda existir: câmera desconectada
   // entre uma tentativa e outra deixaria o seletor apontando para o nada.
   if (atual && el.dispositivo.querySelector(`option[value="${CSS.escape(atual)}"]`)) {
     el.dispositivo.value = atual;
   }
   el.campoDispositivo.hidden = false;
+}
+
+/**
+ * Avisa quando o que está medindo é uma câmera virtual.
+ *
+ * Não bloqueia: pode haver motivo para usar uma, e decidir pelo usuário seria
+ * presunção. Mas a medição com câmera virtual é quase sempre ruído, e deixar
+ * isso sem aviso faz a pessoa concluir que o sistema não funciona quando o que
+ * não funciona é a fonte.
+ */
+function avisarSeCameraVirtual() {
+  const trilha = fluxo?.getVideoTracks?.()[0];
+  const rotulo = trilha?.label || '';
+  if (!rotulo || !pareceCameraVirtual(rotulo)) return false;
+
+  const temReal = [...(el.dispositivo?.options || [])]
+    .some((o) => !/virtual, não recomendada/.test(o.textContent));
+
+  dizer(
+    `Está medindo pela "${rotulo}", que é uma câmera virtual. `
+    + 'Programa de câmera virtual aplica enquadramento automático, suavização '
+    + 'de pele e correção de cor, que são exatamente as operações que apagam o '
+    + 'sinal do pulso. '
+    + (temReal
+      ? 'Escolha a câmera de verdade na lista abaixo e comece de novo.'
+      : 'Feche o programa da câmera para que a câmera de verdade apareça.'),
+    'alerta',
+  );
+  return true;
 }
 
 /**
@@ -633,24 +842,33 @@ function laco() {
   // Rastreamento antes da medição: as regiões acompanham o rosto, então a
   // pessoa pode se mover. Sem isso valeriam as posições fixas, e o contorno
   // oval na tela seria a única referência.
-  if (rastreamentoLigado && medidor.modo !== 'dedo') {
-    contadorDeQuadros += 1;
-    if (contadorDeQuadros % INTERVALO_DE_LOCALIZACAO === 0 || !rastreador.caixa) {
+  if (rastreamentoLigado && medidor.modo !== 'dedo' && modeloDaCascata) {
+    const agoraMs = performance.now();
+    if (agoraMs - ultimaLocalizacao >= INTERVALO_DE_LOCALIZACAO_MS || !rastreador.caixa) {
+      ultimaLocalizacao = agoraMs;
       const dados = ctx.getImageData(0, 0, largura, altura).data;
       const caixa = rastreador.atualizar(dados, largura, altura);
       const regioes = caixa ? rastreador.regioes() : null;
       if (regioes) {
         regioesAtuais = regioes;
         faixasDeFundoAtuais = regioesDeFundo(caixa);
+        el.guia.classList.remove('visivel');
       } else if (rastreador.perdeuORosto) {
         // Perdeu o rosto de vez. Lista vazia faz o medidor relatar ausência de
         // pele, em vez de seguir medindo um lugar onde o rosto já não está.
         regioesAtuais = [];
         faixasDeFundoAtuais = null;
+        // E o contorno volta, para a pessoa ter o que fazer: encaixar o rosto
+        // nele é a saída quando o detector não acha.
+        el.guia.classList.add('visivel');
       }
       desenharRegioes(regioesAtuais, caixa);
     }
   }
+
+  // Avalia o desempenho sem bloquear o laço: a função sai na hora até ter
+  // amostra suficiente, e só então decide.
+  void descerDegrauSeNecessario();
 
   const agora = performance.now() / 1000;
   const estado = rastreamentoLigado && regioesAtuais
@@ -693,7 +911,32 @@ function laco() {
 
       const nivel = confiancaDe(analise.snrDb);
       if (nivel === 'baixa' || nivel === 'descartada') {
-        dizer('Sinal fraco. Melhore a luz de frente e fique mais parado.', 'alerta');
+        /*
+          Diagnóstico em vez de conselho genérico.
+
+          "Melhore a luz e fique parado" é o tipo de mensagem que não ajuda,
+          porque não diz o que está errado nem quanto. Agora, quando a causa
+          provável é escuridão, a mensagem diz **o número medido** e a meta.
+
+          O limiar de 60 saiu da física do problema: a variação que carrega o
+          pulso é de 0,1% a 1% da intensidade, e o sensor quantiza em inteiros.
+          Com luminância 20, o pulso vale entre 0,02 e 0,2 níveis, muito abaixo
+          do passo de quantização, e sobrevive apenas pelo que a média espacial
+          recupera. Acima de 60 o pulso passa a valer de 0,06 a 0,6 nível, que
+          já é a faixa em que a promediação resolve com folga.
+        */
+        const luz = medidor.luminanciaMedia;
+        if (Number.isFinite(luz) && luz < 60) {
+          dizer(
+            `Sinal fraco, e a causa mais provável é luz: a pele está medindo `
+            + `${luz.toFixed(0)} de 255 de luminância. Abaixo de 60 o pulso fica `
+            + 'menor que o passo de quantização da câmera. Ponha uma luz de '
+            + 'frente, não atrás.',
+            'alerta',
+          );
+        } else {
+          dizer('Sinal fraco. Fique mais parado e evite luz que oscila.', 'alerta');
+        }
       } else {
         dizer(`Medindo. Confiança ${nivel}.`);
       }
@@ -722,14 +965,21 @@ async function comecar() {
       modo: fonte === 'dedo' ? 'dedo' : 'rosto',
     });
 
-    // O rastreamento não depende de download nem de permissão extra, então
-    // liga de imediato para tudo que não é o modo dedo. No modo dedo não há
-    // rosto: o que está na frente da lente é o dedo da pessoa.
+    // No modo dedo não há rosto: o que está na frente da lente é o dedo.
     regioesAtuais = null;
     faixasDeFundoAtuais = null;
-    contadorDeQuadros = 0;
+    ultimaLocalizacao = 0;
     rastreador.reiniciar();
     rastreamentoLigado = fonte !== 'dedo';
+    if (rastreamentoLigado) {
+      // Sem bloquear: a medição começa pelo contorno fixo e passa para o
+      // rastreamento quando o modelo chega.
+      garantirModelo().then((modelo) => {
+        if (modelo && rodando) {
+          dizer('Rosto sendo acompanhado. Você pode se mover.');
+        }
+      });
+    }
 
     let ajustes = null;
     if (fonte === 'tela') {
@@ -760,8 +1010,11 @@ async function comecar() {
       ajustes = await iniciarCamera();
     }
 
+    // A resolução vai no campo dela. Antes era escrita no campo rotulado
+    // "taxa de quadros", que depois era sobrescrito pela taxa de verdade: até
+    // a primeira medida sair, a tela dizia que a taxa de quadros era 640x480.
     if (ajustes?.width) {
-      el.fps.textContent = `${ajustes.width}x${ajustes.height}`;
+      el.resolucao.textContent = `${ajustes.width}x${ajustes.height}`;
     }
 
     if (cancelado) {
@@ -797,12 +1050,20 @@ async function comecar() {
         acendeu ? '' : 'alerta',
       );
     } else {
-      // O contorno oval não aparece mais no modo automático: ele diria para a
-      // pessoa fazer uma coisa que o sistema já faz, e o que de fato importa
-      // agora são as caixas desenhadas, que mostram onde está medindo.
-      el.guia.classList.remove('visivel');
-      dizer('Olhe para a câmera. Você pode se mover, só mantenha a luz estável.');
+      // O contorno aparece até o rastreamento assumir. Enquanto o modelo não
+      // chega, ou se o detector não achar o rosto, ele é a referência que a
+      // pessoa tem; assim que a caixa for localizada, o laço o esconde.
+      el.guia.classList.add('visivel');
+      // O aviso de câmera virtual tem precedência sobre a instrução normal:
+      // medindo por uma delas, nenhuma instrução de postura vai salvar o
+      // resultado, e insistir em dar dica de iluminação seria desviar do que
+      // de fato importa.
+      if (!avisarSeCameraVirtual()) {
+        dizer('Olhe para a câmera. Você pode se mover, só mantenha a luz estável.');
+      }
     }
+    quadrosParaAvaliarDesempenho = 0;
+    jaAvaliouDesempenho = false;
     laco();
   } catch (erro) {
     pararCamera();
