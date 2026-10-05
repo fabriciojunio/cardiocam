@@ -312,7 +312,52 @@ async function abrirFluxo(idDispositivo) {
   tentativas.push({ facingMode: 'user' });
   tentativas.push(true);
 
-  return await primeiraQueAbrir(tentativas);
+  try {
+    return await primeiraQueAbrir(tentativas);
+  } catch (erro) {
+    // Permissão negada não melhora trocando de dispositivo.
+    if (erro?.name === 'NotAllowedError' || erro?.name === 'SecurityError') throw erro;
+
+    /*
+      Última cartada: tentar **cada câmera do aparelho, uma por uma**.
+
+      Isto existe por causa de um caso real. Em 05/10/2026 a página falhava com
+      `NotReadableError` num computador com duas câmeras, e o OpenCV, fora do
+      navegador, lia das duas sem problema. A câmera não estava ocupada: o que
+      acontecia é que todas as tentativas acima resolvem para a **mesma**
+      câmera, a padrão do navegador. Se é justamente ela que falha, afrouxar
+      resolução e `facingMode` não muda nada, porque o dispositivo é o mesmo.
+
+      `enumerateDevices` só revela os identificadores depois de alguma
+      permissão ter sido concedida, e a esta altura ela já foi, mesmo que a
+      abertura tenha falhado depois. Por isso esta etapa vem no fim, e não no
+      começo: antes da primeira tentativa a lista viria sem identificador útil.
+    */
+    const cameras = await listarCameras();
+    const jaTentado = new Set([idDispositivo].filter(Boolean));
+    const restantes = cameras.filter((c) => c.deviceId && !jaTentado.has(c.deviceId));
+
+    if (restantes.length === 0) throw erro;
+
+    for (let i = 0; i < restantes.length; i++) {
+      if (cancelado) throw new Error('Medição cancelada.');
+      const camera = restantes[i];
+      const nome = camera.label || `câmera ${i + 1}`;
+      try {
+        dizer(`A câmera padrão falhou. Tentando ${nome}…`);
+        const aberto = await pedirCamera({ deviceId: { exact: camera.deviceId } });
+        // Deixa o seletor refletindo o que de fato abriu, senão a próxima
+        // medição recomeça pela câmera que não funciona.
+        if (el.dispositivo && el.dispositivo.querySelector(`option[value="${camera.deviceId}"]`)) {
+          el.dispositivo.value = camera.deviceId;
+        }
+        return aberto;
+      } catch {
+        await espera(300);
+      }
+    }
+    throw erro;
+  }
 }
 
 async function primeiraQueAbrir(tentativas) {
@@ -354,18 +399,51 @@ async function listarCameras() {
   }
 }
 
+/**
+ * Monta o seletor de câmera, quando há mais de uma.
+ *
+ * Chamado depois de abrir **e também depois de falhar**. O segundo caso é o
+ * que importa: num aparelho com duas câmeras, se a padrão do navegador não
+ * abre, é pelo seletor que se escolhe a outra. Preencher a lista só no sucesso
+ * deixava a ferramenta aparecer apenas para quem não precisava dela.
+ */
 async function atualizarListaDeCameras() {
-  const cameras = await listarCameras();
+  // Entrada sem identificador é a que o navegador devolve antes de conceder
+  // permissão: não serve para escolher nada e só polui a lista.
+  const cameras = (await listarCameras()).filter((c) => c.deviceId);
+
   if (cameras.length <= 1 || !el.dispositivo) {
     if (el.campoDispositivo) el.campoDispositivo.hidden = true;
     return;
   }
+
   const atual = el.dispositivo.value;
   el.dispositivo.innerHTML = cameras
-    .map((c, i) => `<option value="${c.deviceId}">${c.label || `Câmera ${i + 1}`}</option>`)
+    .map((c, i) => `<option value="${escaparHtml(c.deviceId)}">${escaparHtml(c.label || `Câmera ${i + 1}`)}</option>`)
     .join('');
-  if (atual) el.dispositivo.value = atual;
+  // Só restaura a escolha anterior se ela ainda existir: câmera desconectada
+  // entre uma tentativa e outra deixaria o seletor apontando para o nada.
+  if (atual && el.dispositivo.querySelector(`option[value="${CSS.escape(atual)}"]`)) {
+    el.dispositivo.value = atual;
+  }
   el.campoDispositivo.hidden = false;
+}
+
+/**
+ * Escapa texto que vai para dentro de HTML montado em string.
+ *
+ * O rótulo da câmera vem do sistema operacional e do fabricante, não de nós.
+ * É improvável que contenha caractere de marcação, mas montar HTML com texto
+ * de fora sem escapar é o tipo de coisa que funciona por anos e um dia não
+ * funciona.
+ */
+function escaparHtml(texto) {
+  return String(texto)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 async function iniciarCamera() {
@@ -394,8 +472,9 @@ async function iniciarCamera() {
       el.video.addEventListener('loadeddata', pronto, { once: true });
       setTimeout(
         () => (el.video.videoWidth ? resolve() : reject(new Error(
-          'A câmera abriu mas não entregou nenhuma imagem. Costuma ser outro ' +
-          'programa usando a câmera ao mesmo tempo.',
+          'A câmera abriu mas não entregou nenhuma imagem em 4 segundos. '
+          + 'Se o aparelho tiver mais de uma câmera, escolha outra na lista '
+          + 'abaixo e tente de novo.',
         ))),
         4000,
       );
@@ -727,7 +806,29 @@ async function comecar() {
     laco();
   } catch (erro) {
     pararCamera();
-    dizer(cancelado ? 'Medição cancelada.' : mensagemDeErroDeCamera(erro), cancelado ? '' : 'erro');
+    if (cancelado) {
+      dizer('Medição cancelada.');
+    } else {
+      // Atualiza a lista de câmeras **também quando falha**. Antes ela só era
+      // preenchida depois de uma abertura bem sucedida, o que deixava quem não
+      // conseguia abrir sem o seletor, isto é, sem como escolher a outra
+      // câmera do aparelho. Era o caminho sem saída: a ferramenta que
+      // resolveria o problema só aparecia para quem não tinha o problema.
+      await atualizarListaDeCameras().catch(() => {});
+
+      // E diz quantas câmeras foram encontradas. Sem isso, "não consegui ler
+      // nenhuma" não distingue "o aparelho não tem câmera" de "tem duas e as
+      // duas recusaram", que pedem providências diferentes.
+      const encontradas = (await listarCameras().catch(() => [])).filter((c) => c.deviceId);
+      const quantas = encontradas.length === 0
+        ? ' O navegador não enumerou nenhuma câmera.'
+        : ` Câmeras que o navegador enumerou: ${encontradas.length}`
+          + (encontradas.some((c) => c.label)
+            ? ` (${encontradas.map((c) => c.label || 'sem nome').join(', ')}).`
+            : '.');
+
+      dizer(mensagemDeErroDeCamera(erro) + quantas, 'erro');
+    }
   } finally {
     // Sem isto, qualquer falha durante a abertura deixaria a interface presa
     // com o botão desabilitado e sem saída a não ser recarregar a página.
@@ -751,10 +852,24 @@ function mensagemDeErroDeCamera(erro) {
       return 'Nenhuma câmera encontrada neste aparelho.';
     case 'NotReadableError':
     case 'TrackStartError':
+      /*
+        A mensagem anterior afirmava a causa: "outro programa está com ela
+        aberta". Em 05/10/2026 isso se mostrou errado num caso real, em que a
+        câmera estava livre e o OpenCV lia dela normalmente fora do navegador.
+
+        Dizer a causa errada com segurança é pior que não dizer: manda a pessoa
+        fechar programas que não são o problema, e quando isso não resolve ela
+        conclui que o sistema não funciona. Agora a mensagem descreve o que
+        aconteceu e lista o que conferir, em ordem de probabilidade, sem
+        prometer qual é.
+      */
       return (
-        'A câmera acende mas o navegador não consegue ler dela. Isso quer dizer ' +
-        'que outro programa está com ela aberta: feche o Cardiocam do PowerShell, ' +
-        'o Teams, Meet, Discord, OBS ou o app Câmera do Windows, e recarregue esta página.'
+        'O navegador não conseguiu ler nenhuma das câmeras. Já tentei todas as '
+        + 'que este aparelho tem. Confira, nesta ordem: outro programa com a '
+        + 'câmera aberta (Teams, Meet, Discord, OBS, app Câmera); permissão de '
+        + 'câmera do Windows para o navegador; e desconectar e reconectar a '
+        + 'câmera. Se nada resolver, teste em outro navegador, porque isso '
+        + 'separa problema de driver de problema do navegador.'
       );
     case 'OverconstrainedError':
       return 'Esta câmera não aceita nenhuma das resoluções pedidas.';
