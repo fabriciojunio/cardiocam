@@ -59,3 +59,19 @@ vercel deploy --prod
 ```
 
 Não há etapa de compilação. São arquivos estáticos e módulos ES nativos.
+
+## Sobre a política de segurança
+
+`connect-src` era `'none'`, que era a garantia mais forte do projeto: nada
+podia sair daqui, nem por engano. Passou para `'self'` quando o detector de
+rosto em cascata entrou, porque ele busca o modelo de 148 KB do próprio site.
+
+A diferença é menor do que parece, e vale registrar: `'self'` permite
+requisição para esta origem e para nenhuma outra. Terceiro continua bloqueado, e
+é por isso que o modelo é hospedado aqui em vez de vir de uma rede de
+distribuição. O vídeo continua sem ter para onde ir.
+
+A alternativa seria embutir o modelo no JavaScript, dispensando a requisição.
+Foi descartada porque faria o arquivo do aplicativo crescer 148 KB para todo
+mundo, inclusive quem só vai usar o modo dedo, e porque modelo versionado à
+parte é mais fácil de trocar.
