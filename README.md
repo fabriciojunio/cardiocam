@@ -81,22 +81,37 @@ que algum código tentasse enviar dados para fora, o navegador recusaria a
 conexão. Detalhes e diferenças em relação a esta versão em
 [web/LEIAME.md](web/LEIAME.md).
 
-**O rosto é rastreado, sem baixar modelo nenhum.** As três regiões medidas
-ficam ancoradas na caixa do rosto, localizada pela mancha de pele usando o
-classificador de crominância que o projeto já tinha testado. A pessoa pode se
-mover.
+**O rosto é detectado por cascata de Haar, portada para o navegador.** As três
+regiões medidas acompanham a caixa do rosto, e a pessoa pode se mover. Não há
+contorno para encaixar nem linha para alinhar.
 
-O caminho óbvio seria o BlazeFace via MediaPipe, e ele foi medido e descartado
-por três motivos, nesta ordem de peso: o runtime em WebAssembly tem 9,3 MB e o
-pacote passa de 18 MB, o que é inviável numa página que precisa abrir no
-celular; a política de segurança do site teria de ser afrouxada em duas
-diretivas para permitir download de terceiro; e modelo em WebAssembly não roda
-na suíte em Node, onde moram os 386 casos do navegador.
+O caminho até aqui passou por duas tentativas, e as duas ensinaram algo.
 
-A limitação honesta da escolha: localizar por cor não distingue rosto de
-qualquer outra mancha de pele grande. Mão na frente da câmera ou braço nu
-atravessando o quadro deslocam a caixa, e a rejeição de salto só cobre o caso
-brusco.
+A primeira localizava o rosto pela **mancha de pele**, reaproveitando o
+classificador de crominância que o projeto já tinha testado. Passou em todo
+cenário sintético e falhou na primeira foto real, pela razão mais simples
+possível: **a parede bege do quarto cai na faixa de crominância da pele e é
+maior que o rosto**. A caixa resultante ocupava 99% da largura do quadro.
+Nenhum ajuste de limiar conserta, porque o problema não é o limiar: é a premissa
+de que a maior mancha cor de pele é um rosto.
+
+A segunda seria o BlazeFace via MediaPipe, medido e descartado por três motivos:
+runtime em WebAssembly de 9,3 MB e pacote acima de 18 MB, inviável numa página
+que abre no celular; a política de segurança do site precisaria ser afrouxada em
+duas diretivas para baixar de terceiro; e modelo em WebAssembly não roda na
+suíte em Node.
+
+A cascata resolve os três: **107 KB de modelo convertido**, JavaScript puro,
+hospedada no próprio site, e é o mesmo algoritmo da versão em Python, o que põe
+as duas implementações em paridade. Na mesma foto em que a cor falhou, ela acha
+o rosto a quatro pixels de onde o OpenCV acha.
+
+Dois erros no porte, e os dois valem registro porque o sintoma não apontava a
+causa. Supor que os classificadores fracos eram tocos de decisão, quando são
+árvores: o detector passava dois estágios e morria no terceiro, em toda posição
+e toda escala. E a normalização da janela, que no OpenCV usa a janela recuada em
+um pixel e a raiz de (área × soma dos quadrados − soma²), não o desvio padrão:
+misturar as convenções dá erro de escala de centenas de vezes.
 
 **Duas coisas que a medição do movimento ensinou**, e que contrariam a
 intuição:
@@ -115,6 +130,31 @@ intuição:
 
 As duas conclusões saíram de um teste de controle que reprovou duas versões do
 cenário. Nas duas vezes o certo era mudar o cenário, não o limiar.
+
+**O número exibido vem do espectro médio**, e não de suavizar estimativas de
+janelas isoladas. Promediar o espectro de janelas sucessivas é a técnica de
+Welch: a variância do espectro estimado cai com o número de segmentos, e disso
+vem tanto um número mais firme quanto um pico que emerge em condição pior. O
+peso de esquecimento, 0,15, saiu de medição contra três alternativas, e é o
+único que ganha da média exponencial **nos dois eixos ao mesmo tempo**: 0,030
+contra 0,036 de desvio, e 17 s contra 19 s para acompanhar uma mudança real de
+frequência. Somar sem esquecer leva 60 s para acompanhar, e foi descartado. A
+mediana móvel também foi medida, e dá desvio pior que a exponencial.
+
+**A correção por fundo é escolhida por medição, não assumida.** As duas versões
+do sinal são calculadas a cada janela, com e sem a correção, e a de melhor
+relação sinal-ruído vence. Isso existe porque a correção não ajuda sempre: num
+enquadramento com roupa clara ocupando metade do quadro, aplicá-la piorou a
+dispersão de 0,10 para 10,12 bpm, porque a referência de iluminação continha
+ombro e roupa, que se movem com a pessoa.
+
+**A taxa de captura é limitada a 20 quadros por segundo, de propósito.** A
+câmera não pode expor um quadro por mais tempo que o intervalo entre quadros: a
+60 o limite é 16 ms, a 20 é 50 ms. Odinaev et al. (CVPRW 2023) acharam o ótimo
+de exposição em 1/16 de segundo e mostram que exposição maior melhora a
+correlação com o fotopletismógrafo de contato em pouca luz, funcionando com até
+25 lux. A revisão sistemática da área dá 19,9 quadros por segundo como piso.
+Para a banda cardíaca, que vai a 3,3 Hz, 20 ainda são três vezes Nyquist.
 
 ## Instalação
 
@@ -230,13 +270,13 @@ pytest -m "not lento"          # pula os testes de vídeo
 pytest --cov=cardiocam         # com cobertura
 ```
 
-São 2.005 casos em Python e 386 no navegador, e nenhum usa simulacro no lugar do
+São 2.005 casos em Python e 426 no navegador, e nenhum usa simulacro no lugar do
 código real. A estratégia é a mesma em todos os níveis: gerar um sinal cuja
 frequência verdadeira nós escolhemos, rodar o sistema de verdade e conferir o
 que sai.
 
 ```bash
-cd web && npm test     # os 386 casos da versão web, em Node
+cd web && npm test     # os 426 casos da versão web, em Node
 ```
 
 - **Unidade** (1.355 casos): resposta em frequência do filtro medida em dezenas
