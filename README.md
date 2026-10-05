@@ -70,15 +70,51 @@ Windows. A correção por fundo funciona independentemente disso.
 
 **https://cardiocam.vercel.app**
 
-Roda no navegador, em computador e celular, sem instalar nada. Mede pela câmera
-ou analisa um vídeo escolhido do aparelho, guarda as medições por pessoa e
-exporta em CSV.
+Roda no navegador, em computador e celular, sem instalar nada. Quatro fontes:
+rosto pela câmera, **janela de chamada** (Teams, Meet, Zoom, WhatsApp), dedo na
+câmera traseira com a lanterna, e arquivo de vídeo. Guarda as medições por
+pessoa e exporta em CSV.
 
 Tudo é processado dentro do navegador. Não existe servidor neste projeto, e o
 cabeçalho `Content-Security-Policy` fecha isso com `connect-src 'none'`: ainda
 que algum código tentasse enviar dados para fora, o navegador recusaria a
 conexão. Detalhes e diferenças em relação a esta versão em
 [web/LEIAME.md](web/LEIAME.md).
+
+**O rosto é rastreado, sem baixar modelo nenhum.** As três regiões medidas
+ficam ancoradas na caixa do rosto, localizada pela mancha de pele usando o
+classificador de crominância que o projeto já tinha testado. A pessoa pode se
+mover.
+
+O caminho óbvio seria o BlazeFace via MediaPipe, e ele foi medido e descartado
+por três motivos, nesta ordem de peso: o runtime em WebAssembly tem 9,3 MB e o
+pacote passa de 18 MB, o que é inviável numa página que precisa abrir no
+celular; a política de segurança do site teria de ser afrouxada em duas
+diretivas para permitir download de terceiro; e modelo em WebAssembly não roda
+na suíte em Node, onde moram os 386 casos do navegador.
+
+A limitação honesta da escolha: localizar por cor não distingue rosto de
+qualquer outra mancha de pele grande. Mão na frente da câmera ou braço nu
+atravessando o quadro deslocam a caixa, e a rejeição de salto só cobre o caso
+brusco.
+
+**Duas coisas que a medição do movimento ensinou**, e que contrariam a
+intuição:
+
+- **Movimento lento não estraga a medição.** Deslocamento a 0,15 Hz fica muito
+  abaixo da banda cardíaca, e o passa-faixa o remove antes de qualquer
+  estimativa. Com a região congelada e o rosto oscilando 10% do quadro, o erro
+  continuou em 0,0 bpm. O que o rastreamento compra é tolerância a deslocamento
+  **grande**, em que a região congelada sai do rosto e falta pele para medir.
+- **Rosto sintético de cor uniforme esconde o problema por completo.** Com o
+  rosto pintado de uma cor só, a máscara de pele seleciona apenas pixels de
+  pele dentro da região, e todos carregam o mesmo pulso, então a medição sai
+  perfeita mesmo com a região no lugar errado. O cenário só passa a significar
+  algo com gradiente de sombreado ao longo da face, que é o que existe de
+  verdade.
+
+As duas conclusões saíram de um teste de controle que reprovou duas versões do
+cenário. Nas duas vezes o certo era mudar o cenário, não o limiar.
 
 ## Instalação
 
@@ -173,7 +209,7 @@ já a eliminam antes de qualquer algoritmo agir. O que separa os métodos é uma
 oscilação de luz que cai *dentro* da faixa de 0,7 a 4 Hz, onde filtrar não
 adianta.
 
-Nesse caso o GREEN erra 42 bpm — exatamente a distância entre o pulso e a
+Nesse caso o GREEN erra 42 bpm, exatamente a distância entre o pulso e a
 interferência. Ele trava na perturbação, porque olhando só o brilho do canal
 verde não há como distinguir "chegou mais sangue" de "chegou mais luz". CHROM e
 POS distinguem porque o sangue muda a *cor* (absorve muito mais no verde que no
@@ -194,20 +230,20 @@ pytest -m "not lento"          # pula os testes de vídeo
 pytest --cov=cardiocam         # com cobertura
 ```
 
-São 1.996 casos em Python e 306 no navegador, e nenhum usa simulacro no lugar do
+São 2.005 casos em Python e 386 no navegador, e nenhum usa simulacro no lugar do
 código real. A estratégia é a mesma em todos os níveis: gerar um sinal cuja
 frequência verdadeira nós escolhemos, rodar o sistema de verdade e conferir o
 que sai.
 
 ```bash
-cd web && npm test     # os 306 casos da versão web, em Node
+cd web && npm test     # os 386 casos da versão web, em Node
 ```
 
 - **Unidade** (1.355 casos): resposta em frequência do filtro medida em dezenas
   de frequências, recuperação de senoides varrendo a banda de 45 a 220 bpm em
   passos de 2,5 bpm, remoção de tendência, rectificação por referência de fundo,
   detecção de picos, geometria, segmentação de pele em oito tons diferentes.
-- **Integração** (543 casos): os quatro algoritmos sobre séries RGB modeladas
+- **Integração** (552 casos): os quatro algoritmos sobre séries RGB modeladas
   fisicamente, variando tom de pele, taxa de quadros, amplitude do pulso, ruído
   e interferência; mais pipeline, fontes, interface e linha de comando.
 - **Ponta a ponta** (98 casos): vídeo renderizado quadro a quadro, cascata de
@@ -244,11 +280,23 @@ Vale ser direto sobre o que o sistema não faz:
 - **Não funciona a partir de uma foto.** É uma impossibilidade física, não uma
   limitação de implementação: frequência é uma medida temporal e uma imagem
   isolada não tem eixo do tempo. São necessários ao menos uns 10 segundos.
-- Precisa de rosto de frente, razoavelmente parado e com luz suficiente. Contra
-  a luz o sinal desaparece.
+- Precisa de rosto de frente e luz suficiente. Contra a luz o sinal desaparece.
+- **Movimento é tolerado, iluminação instável não.** O rastreamento resolve
+  medir o lugar certo enquanto a pessoa se move, e os testes cobram isso com o
+  rosto atravessando 25% do quadro. O que ele não resolve é o outro mecanismo:
+  virar a cabeça muda o ângulo entre a pele e a luz, e isso muda a cor
+  refletida por um motivo que não é o pulso. Luz estável continua valendo mais
+  que ficar imóvel.
+- **O número do cenário sintético é otimista por uma ou duas ordens de
+  grandeza.** Erro de 0,02 bpm é assinatura de cenário fácil, não de bom
+  desempenho: a literatura reporta 3,67 bpm para o POS em dados reais
+  (rPPG-Toolbox, 2023). Qualquer resultado nosso abaixo de 1 bpm em dado real
+  deve ser tratado como suspeita de erro de protocolo.
 - Vídeo comprimido degrada bastante o resultado. Codecs de videochamada usam
   subamostragem de crominância e descartam justamente variações sutis em regiões
-  homogêneas, que é a descrição exata do que procuramos.
+  homogêneas, que é a descrição exata do que procuramos. É por isso que a fonte
+  de chamada avalia resolução, taxa de quadros e tamanho do rosto na captura, e
+  avisa antes de medir.
 
 ## Estrutura
 
@@ -274,9 +322,9 @@ da lógica.
 
 ## Documentação
 
-- [Relatório técnico](docs/RELATORIO.md) — fundamentação teórica, metodologia e
+- [Relatório técnico](docs/RELATORIO.md): fundamentação teórica, metodologia e
   discussão dos resultados
-- [Decisões de arquitetura](docs/adr/) — o porquê das escolhas que não são óbvias
+- [Decisões de arquitetura](docs/adr/): o porquê das escolhas que não são óbvias
 
 ## Licença
 

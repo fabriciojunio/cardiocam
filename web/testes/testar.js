@@ -23,7 +23,15 @@ import {
 import { extrairPulso } from '../js/rppg.js';
 import { classificarPele } from '../js/pele.js';
 import { Medidor, medirDedo, rectificarPeloFundo } from '../js/medidor.js';
-import { PONTOS, regioesAncoradas, regioesDeFundo } from '../js/rosto.js';
+import {
+  ALTURA_MAXIMA_RELATIVA,
+  RastreadorDeRosto,
+  REGIOES_NA_CAIXA,
+  localizarRosto,
+  regioesDaCaixa,
+  regioesDeFundo,
+  saltoAbsurdo,
+} from '../js/rosto.js';
 import { avaliarCaptura, identificarPlataforma, LIMIARES } from '../js/tela.js';
 import {
   GANHO_CANAL,
@@ -528,91 +536,435 @@ for (const [r, g, b] of NAO_PELE) {
 }
 
 // ---------------------------------------------------------------------------
-grupo('Regiões ancoradas nos olhos');
+grupo('Localização do rosto pela mancha de pele');
 
-/* Olhos centrados, separados por 20% da largura do quadro. É a geometria de
-   alguém sentado a meio metro da câmera, que é o caso de uso. */
-const OLHOS_CENTRO = {
-  esquerdo: { x: 0.40, y: 0.40 },
-  direito: { x: 0.60, y: 0.40 },
-};
+/**
+ * Monta um quadro RGBA com um retângulo de pele sobre fundo que não é pele.
+ *
+ * Fundo azul de propósito: é a cor mais distante da faixa de crominância da
+ * pele, então um falso positivo aqui seria defeito do classificador e não
+ * ambiguidade do cenário.
+ */
+function quadroComPele({
+  largura = 160,
+  altura = 120,
+  caixa,
+  pele = [200, 150, 125],
+  fundo = [30, 40, 150],
+}) {
+  const dados = new Uint8ClampedArray(largura * altura * 4);
+  const x0 = Math.round(caixa.x * largura);
+  const y0 = Math.round(caixa.y * altura);
+  const x1 = Math.round((caixa.x + caixa.largura) * largura);
+  const y1 = Math.round((caixa.y + caixa.altura) * altura);
+
+  for (let y = 0; y < altura; y++) {
+    for (let x = 0; x < largura; x++) {
+      const dentro = x >= x0 && x < x1 && y >= y0 && y < y1;
+      const cor = dentro ? pele : fundo;
+      const i = (y * largura + x) * 4;
+      dados[i] = cor[0];
+      dados[i + 1] = cor[1];
+      dados[i + 2] = cor[2];
+      dados[i + 3] = 255;
+    }
+  }
+  return { dados, largura, altura };
+}
 
 {
-  const regioes = regioesAncoradas(OLHOS_CENTRO);
+  const verdadeira = { x: 0.35, y: 0.20, largura: 0.30, altura: 0.40 };
+  const q = quadroComPele({ caixa: verdadeira });
+  const achada = localizarRosto(q.dados, q.largura, q.altura);
+
+  verificar('acha o rosto no quadro', achada !== null);
+  verificar('acerta a posição horizontal',
+    Math.abs(achada.x - verdadeira.x) < 0.03,
+    `achou x=${achada.x.toFixed(3)}, esperado ${verdadeira.x}`);
+  verificar('acerta a largura',
+    Math.abs(achada.largura - verdadeira.largura) < 0.03,
+    `achou ${achada.largura.toFixed(3)}, esperado ${verdadeira.largura}`);
+  verificar('acerta a posição vertical',
+    Math.abs(achada.y - verdadeira.y) < 0.03);
+
+  /* O que faz a medição sobreviver ao movimento: deslocar a mancha tem de
+     deslocar a caixa na mesma medida. */
+  const deslocada = { x: 0.52, y: 0.32, largura: 0.30, altura: 0.40 };
+  const q2 = quadroComPele({ caixa: deslocada });
+  const achada2 = localizarRosto(q2.dados, q2.largura, q2.altura);
+  verificar('rosto deslocado move a caixa junto',
+    Math.abs(achada2.x - deslocada.x) < 0.03
+    && Math.abs(achada2.y - deslocada.y) < 0.03,
+    `achou (${achada2.x.toFixed(2)}, ${achada2.y.toFixed(2)})`);
+  verificar('deslocar não muda o tamanho da caixa',
+    Math.abs(achada2.largura - achada.largura) < 0.03);
+
+  /* Aproximar o rosto aumenta a mancha, e a caixa tem de crescer. */
+  const perto = { x: 0.20, y: 0.10, largura: 0.60, altura: 0.70 };
+  const q3 = quadroComPele({ caixa: perto });
+  const achada3 = localizarRosto(q3.dados, q3.largura, q3.altura);
+  verificar('rosto perto da câmera dá caixa maior',
+    achada3.largura > achada.largura * 1.5);
+
+  /* Pescoço e colo são pele, e sem o corte pela proporção a caixa desceria
+     até a camiseta, jogando a testa para o meio do rosto. */
+  const comPescoco = { x: 0.38, y: 0.15, largura: 0.24, altura: 0.80 };
+  const q4 = quadroComPele({ caixa: comPescoco });
+  const achada4 = localizarRosto(q4.dados, q4.largura, q4.altura);
+  const razao = (achada4.altura * q4.altura) / (achada4.largura * q4.largura);
+  verificar('a altura é cortada pela proporção do rosto',
+    razao <= ALTURA_MAXIMA_RELATIVA + 0.05,
+    `razão altura/largura = ${razao.toFixed(2)}`);
+
+  verificar('quadro sem pele não acha rosto',
+    localizarRosto(
+      quadroComPele({ caixa: { x: 0, y: 0, largura: 0, altura: 0 } }).dados,
+      160, 120,
+    ) === null);
+
+  /* Mancha minúscula: é ruído, não rosto. Medir numa área dessas daria um
+     número com ruído maior que o sinal. */
+  const minuscula = quadroComPele({ caixa: { x: 0.5, y: 0.5, largura: 0.02, altura: 0.02 } });
+  verificar('mancha de pele minúscula é ignorada',
+    localizarRosto(minuscula.dados, minuscula.largura, minuscula.altura) === null);
+
+  verificar('quadro degenerado não quebra',
+    localizarRosto(new Uint8ClampedArray(16), 2, 2) === null
+    && localizarRosto(null, 160, 120) === null);
+
+  /* O passo de amostragem existe para caber no orçamento de tempo do celular,
+     e não deve mudar a resposta de forma perceptível. */
+  const comPasso4 = localizarRosto(q.dados, q.largura, q.altura, 4);
+  verificar('amostrar com passo maior dá praticamente a mesma caixa',
+    Math.abs(comPasso4.x - achada.x) < 0.04
+    && Math.abs(comPasso4.largura - achada.largura) < 0.04);
+
+  /* Tons de pele diferentes têm de dar a mesma caixa: o classificador
+     limiariza em crominância e não em luminância justamente para isso, e aqui
+     a propriedade é cobrada de ponta a ponta. */
+  const TONS = [[235, 215, 200], [205, 175, 150], [160, 130, 105], [110, 85, 65]];
+  for (const tom of TONS) {
+    const qt = quadroComPele({ caixa: verdadeira, pele: tom });
+    const at = localizarRosto(qt.dados, qt.largura, qt.altura);
+    verificar(`localiza rosto de tom rgb(${tom.join(',')})`,
+      at !== null && Math.abs(at.largura - verdadeira.largura) < 0.04,
+      at ? `largura ${at.largura.toFixed(3)}` : 'não achou');
+  }
+}
+
+// ---------------------------------------------------------------------------
+grupo('Regiões derivadas da caixa do rosto');
+
+{
+  const caixa = { x: 0.30, y: 0.20, largura: 0.40, altura: 0.50 };
+  const regioes = regioesDaCaixa(caixa);
+
   verificar('devolve três regiões', regioes?.length === 3);
 
   const [testa, bochechaE, bochechaD] = regioes;
 
-  verificar('a testa fica acima da linha dos olhos',
-    testa.y + testa.altura <= 0.40 + 1e-9,
-    `fundo da testa em ${(testa.y + testa.altura).toFixed(3)}`);
-
-  verificar('as bochechas ficam abaixo da linha dos olhos',
-    bochechaE.y > 0.40 && bochechaD.y > 0.40);
-
-  verificar('a testa é centrada entre os olhos',
-    Math.abs(testa.x + testa.largura / 2 - 0.5) < 0.01);
-
+  verificar('a testa fica na parte de cima da caixa',
+    testa.y < caixa.y + caixa.altura * 0.4);
+  verificar('as bochechas ficam abaixo da testa',
+    bochechaE.y > testa.y + testa.altura && bochechaD.y > testa.y + testa.altura);
+  verificar('a bochecha esquerda fica à esquerda da direita',
+    bochechaE.x < bochechaD.x);
   verificar('as duas bochechas têm o mesmo tamanho',
     Math.abs(bochechaE.largura - bochechaD.largura) < 1e-9
     && Math.abs(bochechaE.altura - bochechaD.altura) < 1e-9);
+  verificar('todas as regiões ficam dentro da caixa',
+    regioes.every((r) =>
+      r.x >= caixa.x - 1e-9
+      && r.y >= caixa.y - 1e-9
+      && r.x + r.largura <= caixa.x + caixa.largura + 1e-9
+      && r.y + r.altura <= caixa.y + caixa.altura + 1e-9));
 
-  verificar('a bochecha esquerda fica à esquerda da direita',
-    bochechaE.x < bochechaD.x);
-
-  /* O que faz a medição funcionar com a pessoa se movendo: as regiões são
-     definidas pela distância entre os olhos, não pela posição absoluta. Mover
-     o rosto tem de deslocar as regiões sem mudar o tamanho delas. */
-  const deslocados = {
-    esquerdo: { x: 0.40 + 0.15, y: 0.40 + 0.08 },
-    direito: { x: 0.60 + 0.15, y: 0.40 + 0.08 },
-  };
-  const movidas = regioesAncoradas(deslocados);
-  verificar('mover o rosto desloca as regiões sem mudar o tamanho',
+  /* Mover a caixa desloca as regiões sem mudar o tamanho delas. */
+  const movida = { x: 0.50, y: 0.35, largura: 0.40, altura: 0.50 };
+  const movidas = regioesDaCaixa(movida);
+  verificar('mover a caixa desloca as regiões sem redimensionar',
     Math.abs(movidas[0].largura - testa.largura) < 1e-9
-    && Math.abs(movidas[0].altura - testa.altura) < 1e-9
-    && Math.abs(movidas[0].x - (testa.x + 0.15)) < 1e-9
-    && Math.abs(movidas[0].y - (testa.y + 0.08)) < 1e-9);
+    && Math.abs(movidas[0].x - (testa.x + 0.20)) < 1e-9);
 
-  /* Aproximar o rosto aumenta a distância interocular, e as regiões têm de
-     crescer na mesma proporção. Sem isso, a pessoa chegando perto mediria só
-     um pedacinho da testa. */
-  const perto = {
-    esquerdo: { x: 0.30, y: 0.40 },
-    direito: { x: 0.70, y: 0.40 },
-  };
-  const ampliadas = regioesAncoradas(perto);
-  verificar('aproximar o rosto dobra o tamanho das regiões',
-    Math.abs(ampliadas[0].largura - testa.largura * 2) < 1e-9);
-
-  /* Rosto inclinado: os olhos deixam de estar na mesma altura. A testa tem de
-     acompanhar o centro, senão sai do rosto. */
-  const inclinado = {
-    esquerdo: { x: 0.40, y: 0.36 },
-    direito: { x: 0.60, y: 0.44 },
-  };
-  const giradas = regioesAncoradas(inclinado);
-  verificar('rosto inclinado mantém a testa centrada no meio dos olhos',
-    Math.abs(giradas[0].x + giradas[0].largura / 2 - 0.5) < 0.01);
-
-  verificar('olhos coincidentes não produzem região',
-    regioesAncoradas({ esquerdo: { x: 0.5, y: 0.5 }, direito: { x: 0.5, y: 0.5 } }) === null);
-
-  verificar('sem olhos não produz região', regioesAncoradas(null) === null);
-
-  /* Rosto na borda do quadro: as regiões são recortadas para dentro, e
-     nenhuma pode sair dos limites, senão `getImageData` lança. */
-  const naBorda = regioesAncoradas({
-    esquerdo: { x: 0.02, y: 0.05 },
-    direito: { x: 0.14, y: 0.05 },
-  });
-  verificar('região na borda fica dentro do quadro',
+  /* Caixa na borda: nenhuma região pode sair do quadro, senão getImageData
+     lança e o laço de medição morre. */
+  const naBorda = regioesDaCaixa({ x: 0.85, y: 0.80, largura: 0.30, altura: 0.40 });
+  verificar('região de caixa na borda fica dentro do quadro',
     naBorda.every((r) => r.x >= 0 && r.y >= 0
       && r.x + r.largura <= 1 + 1e-9 && r.y + r.altura <= 1 + 1e-9));
+
+  verificar('caixa nula não produz região', regioesDaCaixa(null) === null);
+  verificar('caixa vazia não produz região',
+    regioesDaCaixa({ x: 0.5, y: 0.5, largura: 0, altura: 0 }) === null);
+
+  verificar('as proporções são as mesmas da versão em Python',
+    REGIOES_NA_CAIXA.length === 3
+    && REGIOES_NA_CAIXA[0].y === 0.12
+    && REGIOES_NA_CAIXA[1].x === 0.08);
 }
 
-verificar('a ordem dos pontos do detector é a esperada',
-  PONTOS.OLHO_ESQUERDO === 0 && PONTOS.OLHO_DIREITO === 1 && PONTOS.NARIZ === 2);
+// ---------------------------------------------------------------------------
+grupo('Estabilização da caixa ao longo do tempo');
+
+{
+  const caixa = { x: 0.35, y: 0.20, largura: 0.30, altura: 0.40 };
+  const q = quadroComPele({ caixa });
+
+  const rastreador = new RastreadorDeRosto();
+  const primeira = rastreador.atualizar(q.dados, q.largura, q.altura);
+  verificar('o primeiro quadro adota a medição direto', primeira !== null);
+
+  /* Suavização: a caixa não deve pular para a medição nova de uma vez, senão
+     o tremor da localização entra no sinal. */
+  const longe = quadroComPele({
+    caixa: { x: 0.45, y: 0.20, largura: 0.30, altura: 0.40 },
+  });
+  const segunda = rastreador.atualizar(longe.dados, longe.largura, longe.altura);
+  verificar('a caixa se move devagar na direção da medição nova',
+    segunda.x > primeira.x && segunda.x < 0.45,
+    `x foi de ${primeira.x.toFixed(3)} para ${segunda.x.toFixed(3)}`);
+
+  /* Falha momentânea: piscar, virar de leve ou uma sombra passageira não
+     deveriam zerar a medição acumulada. */
+  const semPele = quadroComPele({ caixa: { x: 0, y: 0, largura: 0, altura: 0 } });
+  const mantida = rastreador.atualizar(semPele.dados, 160, 120);
+  verificar('perda momentânea mantém a última caixa',
+    mantida !== null && Math.abs(mantida.x - segunda.x) < 1e-9);
+
+  /* Perda prolongada: aí sim a caixa é descartada, porque continuar medindo
+     onde o rosto não está produz um número sem significado. */
+  for (let i = 0; i < 20; i++) rastreador.atualizar(semPele.dados, 160, 120);
+  verificar('perda prolongada descarta a caixa',
+    rastreador.atualizar(semPele.dados, 160, 120) === null);
+  verificar('o rastreador relata que perdeu o rosto', rastreador.perdeuORosto);
+
+  rastreador.reiniciar();
+  verificar('reiniciar zera o estado',
+    rastreador.caixa === null && !rastreador.perdeuORosto);
+}
+
+{
+  /* Rejeição de salto: rosto humano não atravessa um terço da própria largura
+     em 33 ms. Quando isso aparece, é outra mancha de pele que entrou. */
+  const antiga = { x: 0.35, y: 0.20, largura: 0.30, altura: 0.40 };
+  verificar('salto grande é rejeitado',
+    saltoAbsurdo(antiga, { x: 0.80, y: 0.20, largura: 0.30, altura: 0.40 }));
+  verificar('movimento normal é aceito',
+    !saltoAbsurdo(antiga, { x: 0.38, y: 0.22, largura: 0.30, altura: 0.40 }));
+  verificar('dobrar de tamanho é rejeitado',
+    saltoAbsurdo(antiga, { x: 0.35, y: 0.20, largura: 0.60, altura: 0.80 }));
+  verificar('encolher pela metade é rejeitado',
+    saltoAbsurdo(antiga, { x: 0.35, y: 0.20, largura: 0.14, altura: 0.20 }));
+  verificar('sem caixa anterior nada é salto',
+    !saltoAbsurdo(null, antiga));
+}
+
+// ---------------------------------------------------------------------------
+grupo('Medição com o rosto se movendo');
+
+/**
+ * Quadro inteiro, com um rosto modulado pelo pulso numa posição que muda.
+ *
+ * Diferença importante em relação ao contexto falso usado no teste de pipeline
+ * acima: lá qualquer região pedida devolvia pele, então a posição não
+ * importava e nada do caminho espacial era exercitado. Aqui o quadro é
+ * desenhado de fato e `getImageData` recorta o pedaço certo dele, então pedir
+ * a região errada devolve fundo e a medição falha. É isso que torna este teste
+ * capaz de provar que o rastreamento funciona.
+ */
+function quadroAnimado({ largura, altura, caixa, modulacao, aleatorio, tom }) {
+  const quadro = new Uint8ClampedArray(largura * altura * 4);
+  const x0 = Math.round(caixa.x * largura);
+  const y0 = Math.round(caixa.y * altura);
+  const x1 = Math.round((caixa.x + caixa.largura) * largura);
+  const y1 = Math.round((caixa.y + caixa.altura) * altura);
+  const larguraDoRosto = Math.max(1, x1 - x0);
+  const alturaDoRosto = Math.max(1, y1 - y0);
+
+  for (let y = 0; y < altura; y++) {
+    for (let x = 0; x < largura; x++) {
+      const i = (y * largura + x) * 4;
+      const ruido = ruidoNormal(aleatorio) * 1.5;
+      if (x >= x0 && x < x1 && y >= y0 && y < y1) {
+        /*
+          Sombreado espacial pelo rosto, e é a parte deste cenário que
+          importa mais.
+
+          A primeira versão deste teste pintava o rosto de cor uniforme, e aí
+          a medição com a região congelada saía **perfeita** mesmo com o rosto
+          se movendo: a máscara de pele selecionava só os pixels de pele dentro
+          da região, e todo pixel de pele carregava o mesmo pulso. O teste de
+          controle pegou isso, e com razão. É a mesma lição que o projeto já
+          tinha registrado em outro lugar: rosto sintético de cor uniforme
+          esconde defeito.
+
+          Rosto de verdade não é uniforme. A luz vem de um lado, então há um
+          gradiente de intensidade ao longo da face. Quando a região medida
+          escorrega sobre esse gradiente, a média muda por um motivo que não é
+          o pulso, e essa variação é correlacionada com o movimento. É esse o
+          artefato que o rastreamento evita, e é ele que precisa existir no
+          cenário para o teste significar algo.
+
+          15% de variação ao longo do rosto é conservador: iluminação lateral
+          de ambiente interno produz bem mais que isso.
+        */
+        const ao_longo = (x - x0) / larguraDoRosto;
+        const descendo = (y - y0) / alturaDoRosto;
+        const sombra = 1 - 0.15 * ao_longo - 0.08 * descendo;
+
+        quadro[i + 0] = Math.max(0, Math.min(255, tom.r * modulacao.r * sombra + ruido));
+        quadro[i + 1] = Math.max(0, Math.min(255, tom.g * modulacao.g * sombra + ruido));
+        quadro[i + 2] = Math.max(0, Math.min(255, tom.b * modulacao.b * sombra + ruido));
+      } else {
+        // Fundo azul, longe da faixa de crominância da pele, e sem pulso.
+        quadro[i + 0] = 30 + ruido;
+        quadro[i + 1] = 40 + ruido;
+        quadro[i + 2] = 150 + ruido;
+      }
+      quadro[i + 3] = 255;
+    }
+  }
+
+  return {
+    dadosDoQuadro: quadro,
+    contexto: {
+      getImageData(x, y, l, a) {
+        const recorte = new Uint8ClampedArray(l * a * 4);
+        for (let yy = 0; yy < a; yy++) {
+          const origem = ((y + yy) * largura + x) * 4;
+          recorte.set(quadro.subarray(origem, origem + l * 4), yy * l * 4);
+        }
+        return { data: recorte };
+      },
+    },
+  };
+}
+
+/*
+  Sobre a amplitude escolhida, porque a primeira tentativa deste teste errou.
+
+  Começamos com 10% do quadro e movimento a 0,15 Hz, e a medição com a região
+  **congelada** saiu perfeita. Não foi sorte: 0,15 Hz fica muito abaixo da
+  banda cardíaca de 0,75 a 3,3 Hz, e o passa-faixa remove essa variação antes
+  de qualquer estimativa. **Movimento lento não estraga a medição**, e isso é
+  propriedade do filtro, não do rastreamento.
+
+  O que o rastreamento compra é outra coisa, e é esta que o teste precisa
+  cobrar: tolerância a deslocamento **grande**. Com 25% do quadro, a região
+  congelada passa boa parte do tempo fora do rosto, e aí não há filtro que
+  resolva, porque o que falta é pele dentro da região.
+*/
+for (const amplitudeDoMovimento of [0, 0.25]) {
+  const bpm = 72;
+  const fps = 30;
+  const total = fps * 22;
+  const largura = 192;
+  const altura = 144;
+  const tom = { r: 205, g: 175, b: 150 };
+
+  const aleatorio = geradorAleatorio(4242);
+  const tempos = Array.from({ length: total }, (_, i) => i / fps);
+  const pulso = ondaDePulso(tempos, bpm / 60);
+
+  const medidor = new Medidor({ janelaS: 12, algoritmo: 'pos' });
+  const rastreador = new RastreadorDeRosto();
+  let quadrosComRosto = 0;
+
+  for (let i = 0; i < total; i++) {
+    // Movimento lento, como alguém reacomodando a postura durante uma
+    // conversa, mas de amplitude grande: o rosto atravessa boa parte do
+    // quadro. O que este teste isola é o erro de **medir o lugar errado**, e
+    // não o artefato de iluminação por pose, que é outro mecanismo.
+    const deslocamento = amplitudeDoMovimento * Math.sin(2 * Math.PI * 0.15 * tempos[i]);
+    const caixa = {
+      x: 0.35 + deslocamento,
+      y: 0.20 + deslocamento * 0.2,
+      largura: 0.30,
+      altura: 0.42,
+    };
+
+    const amplitude = 0.02;
+    const modulacao = {
+      r: 1 + amplitude * GANHO_CANAL.vermelho * pulso[i],
+      g: 1 + amplitude * GANHO_CANAL.verde * pulso[i],
+      b: 1 + amplitude * GANHO_CANAL.azul * pulso[i],
+    };
+
+    const { dadosDoQuadro, contexto } = quadroAnimado({
+      largura, altura, caixa, modulacao, aleatorio, tom,
+    });
+
+    const localizada = rastreador.atualizar(dadosDoQuadro, largura, altura);
+    const regioes = localizada ? rastreador.regioes() : null;
+    if (regioes) quadrosComRosto++;
+
+    medidor.processarQuadro(
+      contexto, largura, altura, tempos[i],
+      regioes || [], regioesDeFundo(localizada),
+    );
+  }
+
+  const rotulo = amplitudeDoMovimento === 0 ? 'parado' : 'com movimento de 25% do quadro';
+  const analise = medidor.analisar();
+
+  verificar(`rosto ${rotulo}: localizado em quase todos os quadros`,
+    quadrosComRosto > total * 0.95,
+    `${quadrosComRosto} de ${total}`);
+  proximo(`rosto ${rotulo}: recupera ${bpm} bpm`, analise?.bpm, bpm, 3);
+}
+
+{
+  /* O controle do teste anterior: com as regiões paradas e o rosto
+     atravessando 25% do quadro, a medição tem de piorar. Sem este contraste,
+     passar no teste de cima não provaria que o rastreamento fez diferença:
+     provaria apenas que o cenário era fácil.
+
+     Este controle já se provou útil. Ele reprovou duas versões anteriores
+     deste cenário, uma com rosto de cor uniforme e outra com movimento
+     pequeno, e nas duas vezes o certo era mudar o cenário, não o limiar. */
+  const bpm = 72;
+  const fps = 30;
+  const total = fps * 22;
+  const largura = 192;
+  const altura = 144;
+  const tom = { r: 205, g: 175, b: 150 };
+
+  const aleatorio = geradorAleatorio(4242);
+  const tempos = Array.from({ length: total }, (_, i) => i / fps);
+  const pulso = ondaDePulso(tempos, bpm / 60);
+
+  const medidor = new Medidor({ janelaS: 12, algoritmo: 'pos' });
+  // Regiões congeladas na posição inicial do rosto.
+  const congeladas = regioesDaCaixa({ x: 0.35, y: 0.20, largura: 0.30, altura: 0.42 });
+
+  for (let i = 0; i < total; i++) {
+    const deslocamento = 0.25 * Math.sin(2 * Math.PI * 0.15 * tempos[i]);
+    const caixa = {
+      x: 0.35 + deslocamento,
+      y: 0.20 + deslocamento * 0.2,
+      largura: 0.30,
+      altura: 0.42,
+    };
+    const amplitude = 0.02;
+    const modulacao = {
+      r: 1 + amplitude * GANHO_CANAL.vermelho * pulso[i],
+      g: 1 + amplitude * GANHO_CANAL.verde * pulso[i],
+      b: 1 + amplitude * GANHO_CANAL.azul * pulso[i],
+    };
+    const { contexto } = quadroAnimado({
+      largura, altura, caixa, modulacao, aleatorio, tom,
+    });
+    medidor.processarQuadro(contexto, largura, altura, tempos[i], congeladas);
+  }
+
+  const analise = medidor.analisar();
+  const erroComRegiaoParada = analise ? Math.abs(analise.bpm - bpm) : Infinity;
+  verificar('região parada com rosto em movimento degrada a medição',
+    erroComRegiaoParada > 3 || !analise,
+    analise
+      ? `erro de ${erroComRegiaoParada.toFixed(1)} bpm, esperado acima de 3`
+      : 'nenhuma medida, o que também confirma a degradação');
+}
 
 // ---------------------------------------------------------------------------
 grupo('Faixas de fundo que fogem do rosto');

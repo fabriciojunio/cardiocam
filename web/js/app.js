@@ -7,7 +7,7 @@
 
 import { confiancaDe } from './dsp.js';
 import { Medidor, analisarVideo, BPM_MAXIMO, BPM_MINIMO } from './medidor.js';
-import { RastreadorDeRosto, regioesAncoradas, regioesDeFundo } from './rosto.js';
+import { RastreadorDeRosto, regioesDeFundo } from './rosto.js';
 import {
   aoEncerrarCaptura,
   avaliarCaptura,
@@ -83,9 +83,8 @@ let cancelado = false;
 let abrindo = false;
 
 /**
- * Rastreamento de rosto. Instância única, criada uma vez e reaproveitada: o
- * download do modelo é a parte cara, e refazê-lo a cada medição faria a
- * primeira leitura demorar sempre.
+ * Rastreamento de rosto. Instância única, porque ela guarda o estado temporal
+ * da suavização, que é o que impede a caixa de tremer entre quadros.
  */
 const rastreador = new RastreadorDeRosto();
 let rastreamentoLigado = false;
@@ -95,18 +94,16 @@ let soltarAvisoDeCaptura = null;
 let plataformaDaCaptura = null;
 
 /**
- * Carimbo monotônico para o detector.
+ * De quantos em quantos quadros o rosto é localizado de novo.
  *
- * `performance.now()` já é monotônico, mas o detector do MediaPipe recusa
- * carimbo repetido, e dois quadros podem cair no mesmo milissegundo quando a
- * taxa é alta. Guardar o último e forçar o avanço evita a exceção.
+ * Localizar custa um histograma sobre o quadro reduzido, que é barato, mas não
+ * de graça em celular. Em 33 ms um rosto humano praticamente não sai do lugar,
+ * então localizar a cada dois quadros divide o custo pela metade sem prejuízo
+ * perceptível. É a mesma decisão da versão em Python, que roda o detector a
+ * cada dois quadros pelo mesmo motivo.
  */
-let ultimoCarimbo = 0;
-function carimboMonotonico() {
-  const agora = performance.now();
-  ultimoCarimbo = agora > ultimoCarimbo ? agora : ultimoCarimbo + 1;
-  return ultimoCarimbo;
-}
+const INTERVALO_DE_LOCALIZACAO = 2;
+let contadorDeQuadros = 0;
 
 // --------------------------------------------------------------- utilidades
 function dizer(texto, tipo = '') {
@@ -554,22 +551,26 @@ function laco() {
   const ctx = el.canvas.getContext('2d', { willReadFrequently: true });
   ctx.drawImage(video, 0, 0, largura, altura);
 
-  // Rastreamento antes da medição. Quando ele está disponível, as regiões
-  // acompanham o rosto e a pessoa pode se mover; quando não está, caem nas
-  // posições fixas e o contorno na tela volta a fazer sentido.
+  // Rastreamento antes da medição: as regiões acompanham o rosto, então a
+  // pessoa pode se mover. Sem isso valeriam as posições fixas, e o contorno
+  // oval na tela seria a única referência.
   if (rastreamentoLigado && medidor.modo !== 'dedo') {
-    const caixa = rastreador.atualizar(video, carimboMonotonico());
-    const ancoradas = caixa ? regioesAncoradas(rastreador.olhos) : null;
-    if (ancoradas) {
-      regioesAtuais = ancoradas;
-      faixasDeFundoAtuais = regioesDeFundo(caixa);
-    } else if (rastreador.perdeuORosto) {
-      // Perdeu o rosto de vez: sem regiões, o medidor relata ausência de pele
-      // em vez de continuar medindo um lugar onde o rosto já não está.
-      regioesAtuais = [];
-      faixasDeFundoAtuais = null;
+    contadorDeQuadros += 1;
+    if (contadorDeQuadros % INTERVALO_DE_LOCALIZACAO === 0 || !rastreador.caixa) {
+      const dados = ctx.getImageData(0, 0, largura, altura).data;
+      const caixa = rastreador.atualizar(dados, largura, altura);
+      const regioes = caixa ? rastreador.regioes() : null;
+      if (regioes) {
+        regioesAtuais = regioes;
+        faixasDeFundoAtuais = regioesDeFundo(caixa);
+      } else if (rastreador.perdeuORosto) {
+        // Perdeu o rosto de vez. Lista vazia faz o medidor relatar ausência de
+        // pele, em vez de seguir medindo um lugar onde o rosto já não está.
+        regioesAtuais = [];
+        faixasDeFundoAtuais = null;
+      }
+      desenharRegioes(regioesAtuais, caixa);
     }
-    desenharRegioes(regioesAtuais, caixa);
   }
 
   const agora = performance.now() / 1000;
@@ -642,25 +643,14 @@ async function comecar() {
       modo: fonte === 'dedo' ? 'dedo' : 'rosto',
     });
 
-    // O rastreador é carregado em paralelo com a abertura da fonte, e sem
-    // bloquear: a medição começa com o contorno fixo e passa para o modo
-    // automático assim que o modelo estiver pronto. Esperar o download antes de
-    // mostrar a câmera deixaria a tela parada por alguns segundos sem motivo
-    // visível para quem está olhando.
-    rastreamentoLigado = false;
+    // O rastreamento não depende de download nem de permissão extra, então
+    // liga de imediato para tudo que não é o modo dedo. No modo dedo não há
+    // rosto: o que está na frente da lente é o dedo da pessoa.
     regioesAtuais = null;
     faixasDeFundoAtuais = null;
-    if (fonte !== 'dedo') {
-      rastreador.reiniciar();
-      rastreador.carregar().then((pronto) => {
-        if (!rodando) return;
-        rastreamentoLigado = pronto;
-        if (pronto) {
-          el.guia.classList.remove('visivel');
-          dizer('Rosto sendo acompanhado. Você pode se mover.');
-        }
-      });
-    }
+    contadorDeQuadros = 0;
+    rastreador.reiniciar();
+    rastreamentoLigado = fonte !== 'dedo';
 
     let ajustes = null;
     if (fonte === 'tela') {
@@ -728,8 +718,11 @@ async function comecar() {
         acendeu ? '' : 'alerta',
       );
     } else {
-      el.guia.classList.add('visivel');
-      dizer('Encaixe o rosto no contorno e alinhe os olhos na linha.');
+      // O contorno oval não aparece mais no modo automático: ele diria para a
+      // pessoa fazer uma coisa que o sistema já faz, e o que de fato importa
+      // agora são as caixas desenhadas, que mostram onde está medindo.
+      el.guia.classList.remove('visivel');
+      dizer('Olhe para a câmera. Você pode se mover, só mantenha a luz estável.');
     }
     laco();
   } catch (erro) {

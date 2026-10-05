@@ -1,80 +1,222 @@
 /**
- * Rastreamento de rosto no navegador, com degradação para o contorno fixo.
+ * Localização e rastreamento do rosto, sem baixar modelo nenhum.
  *
- * Por que isto passou a existir. A versão web media dentro de um oval fixo na
- * tela e pedia que a pessoa encaixasse o rosto nele. O comentário que
- * justificava essa escolha estava tecnicamente correto: com o rosto ancorado
- * num lugar fixo, a região medida para de tremer, e o tremor da caixa é o que
- * mais estraga a medição automática.
+ * ## Por que isto passou a existir
  *
- * Só que o preço era alto e ficou evidente no uso: a pessoa tem de ficar
- * imóvel, e a câmera também. Sair do oval por meio segundo contamina a janela
- * inteira, porque a média passa a incluir parede em vez de pele, e isso é uma
- * variação de amplitude muito maior que o pulso.
+ * A versão web media dentro de um oval fixo na tela e pedia que a pessoa
+ * encaixasse o rosto nele. O comentário que justificava a escolha estava
+ * tecnicamente correto: com o rosto ancorado num lugar fixo, a região medida
+ * para de tremer entre quadros, e o tremor da caixa é o que mais estraga a
+ * medição automática.
  *
- * A saída é rastrear o rosto de verdade e ancorar as regiões nos olhos, que é
- * exatamente o que a versão em Python faz. Com as regiões seguindo o rosto, o
- * conjunto de pixels promediado continua sendo pele mesmo com a pessoa se
- * movendo, e o problema volta a ser só o artefato de iluminação por pose, que
- * é tratável.
+ * Só que o preço aparece no primeiro uso real. A pessoa tem de ficar imóvel, a
+ * câmera também, e sair do oval por meio segundo contamina a janela inteira,
+ * porque a média passa a incluir parede em vez de pele. Isso é uma variação de
+ * amplitude muito maior que o pulso, e na banda errada.
  *
- * O detector é o BlazeFace de curto alcance, via MediaPipe Tasks Vision. A
- * escolha por ele e não pelo modelo de 478 pontos é de custo: ele devolve a
- * caixa e seis pontos (olho esquerdo, olho direito, nariz, boca e os dois
- * tragos), e os dois olhos já bastam para ancorar testa e bochechas na mesma
- * proporção da versão em Python. O modelo de malha completa custaria uns 4 MB
- * de download para informação que não usaríamos.
+ * ## Por que não um modelo de rede neural
  *
- * **Sobre privacidade.** O modelo e o runtime são baixados uma vez de uma rede
- * de distribuição; o vídeo não vai a lugar nenhum. A inferência roda em
- * WebAssembly dentro da própria aba. Nenhum quadro e nenhuma medição saem do
- * aparelho, e isso é propriedade do código, não promessa: não há envio em
- * nenhum caminho.
+ * O caminho óbvio seria o BlazeFace, via MediaPipe. Foi medido e descartado por
+ * três motivos, nesta ordem de peso:
  *
- * **Sobre degradação.** Se a rede estiver bloqueada, se o navegador não tiver
- * suporte ou se o carregamento falhar, o módulo avisa e o medidor volta ao
- * contorno fixo. Página que deixa de funcionar porque uma rede de distribuição
- * caiu é pior que página com modo manual.
+ * 1. **Tamanho.** O runtime em WebAssembly tem 9,3 MB e o pacote todo passa de
+ *    18 MB. Numa página que precisa funcionar em celular, isso não é detalhe:
+ *    é a diferença entre abrir e não abrir.
+ * 2. **Política de segurança.** O site serve com `script-src 'self'` e
+ *    `connect-src 'none'`. Baixar modelo de terceiro exigiria afrouxar as duas
+ *    diretivas, e elas são o que garante que nenhum dado saia daqui. Trocar
+ *    uma garantia verificável por conveniência é troca ruim.
+ * 3. **Testabilidade.** Modelo em WebAssembly não roda na suíte em Node, que é
+ *    onde os 356 casos deste projeto moram. Um rastreador que não pode ser
+ *    testado é um rastreador em que não se confia.
+ *
+ * ## Como funciona então
+ *
+ * Reaproveitando o que o projeto já tem testado: o classificador de pele por
+ * crominância. Ele limiariza em Cr e Cb e nunca em luminância, de propósito, o
+ * que o torna estável em qualquer tom de pele. É a base certa para localizar
+ * rosto sem treinar nada.
+ *
+ * O caminho é clássico e barato:
+ *
+ * 1. histograma de pixels de pele por coluna e por linha, sobre o quadro já
+ *    reduzido que o medidor usa;
+ * 2. extensão horizontal e vertical por limiar relativo ao máximo, o que
+ *    descarta pixel de pele isolado sem precisar de componente conexo;
+ * 3. **corte da altura pela proporção do rosto.** Pescoço e colo são pele e
+ *    entrariam na caixa, puxando-a para baixo. Um rosto humano tem altura
+ *    entre 1,2 e 1,6 vez a largura, então a altura é limitada a 1,45 vez;
+ * 4. suavização exponencial e rejeição de salto, iguais às da versão em
+ *    Python e pelos mesmos motivos.
+ *
+ * As regiões saem das mesmas proporções da caixa que a versão em Python usa
+ * quando não tem os olhos. Isso é deliberado: as duas implementações precisam
+ * medir a mesma coisa para que os números sejam comparáveis entre elas.
+ *
+ * ## O que este rastreador não faz
+ *
+ * Não distingue rosto de qualquer outra mancha de pele grande. Mão na frente da
+ * câmera, braço nu atravessando o quadro ou madeira de tom próximo ao da pele
+ * deslocam a caixa. A rejeição de salto cobre o caso brusco; a mão parada ao
+ * lado do rosto, não. É a limitação honesta de localizar por cor em vez de por
+ * forma, e é o preço de não baixar 9 MB.
+ *
+ * Também não estima pose. Virar a cabeça muda o ângulo entre a pele e a luz, e
+ * isso muda a cor refletida por um motivo que não é o pulso. Acompanhar o rosto
+ * resolve medir o lugar certo, não a luz mudando.
  */
 
-const BASE_TAREFAS = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21';
-const CAMINHO_WASM = `${BASE_TAREFAS}/wasm`;
-const MODELO =
-  'https://storage.googleapis.com/mediapipe-models/face_detector/' +
-  'blaze_face_short_range/float16/1/blaze_face_short_range.tflite';
-
-/** Ordem dos seis pontos que o BlazeFace devolve. */
-export const PONTOS = Object.freeze({
-  OLHO_ESQUERDO: 0,
-  OLHO_DIREITO: 1,
-  NARIZ: 2,
-  BOCA: 3,
-  TRAGO_ESQUERDO: 4,
-  TRAGO_DIREITO: 5,
-});
+import { classificarPele } from './pele.js';
 
 /**
- * Peso da detecção nova na média exponencial da caixa.
+ * Proporções das regiões dentro da caixa do rosto.
  *
- * Mesmo valor da versão em Python, e pelo mesmo motivo: o detector redetecta do
- * zero a cada quadro e a caixa oscila alguns pixels mesmo com a pessoa imóvel.
- * Suavizar troca esse tremor por um atraso, e o atraso é o mal menor, porque
- * tremor entra no sinal como ruído na banda errada e atraso só desloca a região
- * alguns pixels.
+ * Iguais às da versão em Python e às que a versão web já usava dentro do oval
+ * fixo. Mudar aqui sem mudar lá quebraria a comparabilidade entre as duas, que
+ * é o que permite usar uma para validar a outra.
+ *
+ * Olhos e boca ficam fora de propósito: piscar e falar produzem movimento
+ * exatamente na banda de frequência do coração, e esse artefato nenhuma
+ * filtragem posterior remove.
  */
+export const REGIOES_NA_CAIXA = Object.freeze([
+  Object.freeze({ x: 0.24, y: 0.12, largura: 0.52, altura: 0.20 }),
+  Object.freeze({ x: 0.08, y: 0.50, largura: 0.30, altura: 0.30 }),
+  Object.freeze({ x: 0.62, y: 0.50, largura: 0.30, altura: 0.30 }),
+]);
+
+/**
+ * Altura máxima da caixa, em múltiplos da largura.
+ *
+ * Existe por causa do pescoço. Pescoço e colo são pele pela crominância, e sem
+ * este corte a caixa desce até a camiseta, jogando a região da testa para o
+ * meio do rosto e as bochechas para a mandíbula.
+ *
+ * O valor vem da proporção do rosto humano, que fica entre 1,2 e 1,6 vez a
+ * largura. 1,45 deixa folga para cabelo na testa sem alcançar o pescoço.
+ */
+export const ALTURA_MAXIMA_RELATIVA = 1.45;
+
+/** Fração do máximo do histograma que conta como "tem pele nesta faixa". */
+const LIMIAR_DO_HISTOGRAMA = 0.28;
+
+/** Pixels de pele mínimos para considerar que há rosto no quadro. */
+const PIXELS_MINIMOS = 180;
+
+/** Peso da medição nova na média exponencial da caixa. */
 const SUAVIZACAO = 0.25;
 
-/**
- * Salto máximo aceito entre dois quadros, em fração da largura do rosto.
- *
- * Acima disso a detecção é tratada como falso positivo e descartada. Rosto
- * humano não atravessa um terço da própria largura em 33 ms; detector, sim,
- * quando pega um padrão de parede.
- */
+/** Salto aceito entre quadros, em fração da largura do rosto. */
 const SALTO_MAXIMO = 0.35;
 
-/** Por quantos quadros seguidos a última caixa vale quando o detector falha. */
+/** Quadros seguidos em que a última caixa continua valendo sem detecção. */
 const TOLERANCIA_QUADROS = 15;
+
+/**
+ * Extensão de um histograma, pelo limiar relativo ao máximo.
+ *
+ * Devolve o primeiro e o último índice acima do limiar. Usar limiar relativo e
+ * não absoluto é o que faz isto funcionar igual com rosto perto e longe da
+ * câmera, e com pouca ou muita luz.
+ */
+function extensao(histograma, limiarRelativo) {
+  let maximo = 0;
+  for (const valor of histograma) if (valor > maximo) maximo = valor;
+  if (maximo === 0) return null;
+
+  const limiar = maximo * limiarRelativo;
+  let inicio = -1;
+  let fim = -1;
+  for (let i = 0; i < histograma.length; i++) {
+    if (histograma[i] >= limiar) {
+      if (inicio < 0) inicio = i;
+      fim = i;
+    }
+  }
+  return inicio < 0 ? null : { inicio, fim };
+}
+
+/**
+ * Localiza o rosto num quadro, pela mancha de pele.
+ *
+ * `dados` é o array RGBA de `getImageData`. `passo` amostra um pixel a cada N
+ * em cada eixo: com passo 2 o custo cai a um quarto e a caixa resultante muda
+ * menos de um pixel, porque o que se mede aqui é a extensão de uma mancha
+ * grande e não a posição de uma borda fina.
+ *
+ * @returns {{x,y,largura,altura}|null} caixa em frações do quadro
+ */
+export function localizarRosto(dados, largura, altura, passo = 2) {
+  if (!dados || largura < 8 || altura < 8) return null;
+
+  const porColuna = new Float32Array(largura);
+  const porLinha = new Float32Array(altura);
+  let total = 0;
+
+  for (let y = 0; y < altura; y += passo) {
+    const base = y * largura;
+    for (let x = 0; x < largura; x += passo) {
+      const i = (base + x) * 4;
+      if (!classificarPele(dados[i], dados[i + 1], dados[i + 2])) continue;
+      porColuna[x] += 1;
+      porLinha[y] += 1;
+      total += 1;
+    }
+  }
+
+  // Normaliza pelo número de amostras, para o limiar não depender do passo.
+  if (total * passo * passo < PIXELS_MINIMOS) return null;
+
+  const colunas = extensao(porColuna, LIMIAR_DO_HISTOGRAMA);
+  const linhas = extensao(porLinha, LIMIAR_DO_HISTOGRAMA);
+  if (!colunas || !linhas) return null;
+
+  const x = colunas.inicio / largura;
+  const larguraCaixa = (colunas.fim - colunas.inicio + 1) / largura;
+  const y = linhas.inicio / altura;
+  let alturaCaixa = (linhas.fim - linhas.inicio + 1) / altura;
+
+  if (larguraCaixa <= 0 || alturaCaixa <= 0) return null;
+
+  // Corte pela proporção do rosto, medido em pixels e não em frações, porque
+  // o quadro não é quadrado e comparar frações compararia coisas diferentes.
+  const larguraEmPixels = larguraCaixa * largura;
+  const alturaMaximaEmPixels = larguraEmPixels * ALTURA_MAXIMA_RELATIVA;
+  if (alturaCaixa * altura > alturaMaximaEmPixels) {
+    alturaCaixa = alturaMaximaEmPixels / altura;
+  }
+
+  return {
+    x,
+    y,
+    largura: larguraCaixa,
+    altura: Math.min(alturaCaixa, 1 - y),
+  };
+}
+
+/** Regiões de interesse dentro da caixa do rosto, em frações do quadro. */
+export function regioesDaCaixa(caixa) {
+  if (!caixa || caixa.largura <= 0 || caixa.altura <= 0) return null;
+  return REGIOES_NA_CAIXA.map((r) =>
+    limitar({
+      x: caixa.x + r.x * caixa.largura,
+      y: caixa.y + r.y * caixa.altura,
+      largura: r.largura * caixa.largura,
+      altura: r.altura * caixa.altura,
+    }),
+  );
+}
+
+function limitar(regiao) {
+  const x = Math.max(0, Math.min(1, regiao.x));
+  const y = Math.max(0, Math.min(1, regiao.y));
+  return {
+    x,
+    y,
+    largura: Math.max(0, Math.min(1 - x, regiao.largura)),
+    altura: Math.max(0, Math.min(1 - y, regiao.altura)),
+  };
+}
 
 function interpolar(antiga, nova, peso) {
   return {
@@ -85,273 +227,93 @@ function interpolar(antiga, nova, peso) {
   };
 }
 
-function saltoAbsurdo(antiga, nova) {
+/**
+ * Decide se a caixa nova é salto absurdo em relação à anterior.
+ *
+ * Rosto humano não atravessa um terço da própria largura em 33 ms, e não dobra
+ * de tamanho entre dois quadros. Quando isso aparece, é mancha de pele que
+ * entrou no quadro, não a pessoa se movendo.
+ */
+export function saltoAbsurdo(antiga, nova) {
+  if (!antiga) return false;
   const dx = nova.x + nova.largura / 2 - (antiga.x + antiga.largura / 2);
   const dy = nova.y + nova.altura / 2 - (antiga.y + antiga.altura / 2);
-  const distancia = Math.hypot(dx, dy);
-  if (distancia > SALTO_MAXIMO * Math.max(antiga.largura, 1e-6)) return true;
-  const razao = nova.largura / Math.max(antiga.largura, 1e-6);
+  const referencia = Math.max(antiga.largura, 1e-6);
+  if (Math.hypot(dx, dy) > SALTO_MAXIMO * referencia) return true;
+  const razao = nova.largura / referencia;
   return razao > 1.6 || razao < 0.625;
 }
 
 /**
- * Rastreador de rosto. Mantém o estado entre quadros.
+ * Mantém a caixa estável ao longo do tempo.
  *
- * Uso:
- *   const rastreador = new RastreadorDeRosto();
- *   const pronto = await rastreador.carregar();
- *   const caixa = rastreador.atualizar(video, performance.now());
+ * Suavizar troca o tremor da localização por um atraso, e o atraso é o mal
+ * menor: tremor entra no sinal como ruído na banda errada, e atraso só desloca
+ * a região alguns pixels, o que a folga das proporções absorve.
  */
 export class RastreadorDeRosto {
-  constructor() {
-    this.detector = null;
-    this.disponivel = false;
-    this.motivoIndisponivel = '';
-    this.caixa = null;
-    this.olhos = null;
-    this.quadrosSemRosto = 0;
-    this.deteccoesRejeitadas = 0;
-    this._carregando = null;
-  }
-
-  /**
-   * Baixa o runtime e o modelo. Pode ser chamado mais de uma vez sem repetir o
-   * download: a promessa é memorizada.
-   */
-  async carregar() {
-    if (this._carregando) return this._carregando;
-    this._carregando = this._carregarDeFato();
-    return this._carregando;
-  }
-
-  async _carregarDeFato() {
-    try {
-      const { FaceDetector, FilesetResolver } = await import(
-        /* @vite-ignore */ `${BASE_TAREFAS}/vision_bundle.mjs`
-      );
-      const vision = await FilesetResolver.forVisionTasks(CAMINHO_WASM);
-      this.detector = await FaceDetector.createFromOptions(vision, {
-        baseOptions: { modelAssetPath: MODELO, delegate: 'GPU' },
-        runningMode: 'VIDEO',
-        minDetectionConfidence: 0.5,
-        minSuppressionThreshold: 0.3,
-      });
-      this.disponivel = true;
-      return true;
-    } catch (erro) {
-      // Tenta uma segunda vez em CPU: delegado de GPU falha em aparelho sem
-      // WebGL habilitado, e nesse caso a CPU resolve com folga para um
-      // detector deste tamanho.
-      try {
-        const { FaceDetector, FilesetResolver } = await import(
-          /* @vite-ignore */ `${BASE_TAREFAS}/vision_bundle.mjs`
-        );
-        const vision = await FilesetResolver.forVisionTasks(CAMINHO_WASM);
-        this.detector = await FaceDetector.createFromOptions(vision, {
-          baseOptions: { modelAssetPath: MODELO, delegate: 'CPU' },
-          runningMode: 'VIDEO',
-          minDetectionConfidence: 0.5,
-        });
-        this.disponivel = true;
-        return true;
-      } catch (segundoErro) {
-        this.disponivel = false;
-        this.motivoIndisponivel = String(segundoErro?.message || segundoErro || erro);
-        return false;
-      }
-    }
+  constructor({ suavizacao = SUAVIZACAO, tolerancia = TOLERANCIA_QUADROS } = {}) {
+    this.suavizacao = suavizacao;
+    this.tolerancia = tolerancia;
+    this.reiniciar();
   }
 
   reiniciar() {
     this.caixa = null;
-    this.olhos = null;
     this.quadrosSemRosto = 0;
+    this.saltosRejeitados = 0;
   }
 
   get perdeuORosto() {
-    return this.quadrosSemRosto > TOLERANCIA_QUADROS;
+    return this.quadrosSemRosto > this.tolerancia;
   }
 
-  /**
-   * Processa um quadro e devolve a caixa do rosto em frações do quadro,
-   * ou `null` quando o rosto não está localizado.
-   *
-   * `instanteMs` tem de crescer de forma estritamente monotônica: a API do
-   * MediaPipe rejeita carimbo repetido ou para trás, e o sintoma é uma exceção
-   * no meio do laço de vídeo.
-   */
-  atualizar(video, instanteMs) {
-    if (!this.disponivel || !this.detector) return null;
+  /** Processa um quadro e devolve a caixa estabilizada, ou null. */
+  atualizar(dados, largura, altura, passo = 2) {
+    const medida = localizarRosto(dados, largura, altura, passo);
 
-    let resultado;
-    try {
-      resultado = this.detector.detectForVideo(video, instanteMs);
-    } catch {
-      // Carimbo fora de ordem ou textura ainda não pronta. Vale manter a
-      // última caixa em vez de derrubar a medição.
-      this.quadrosSemRosto += 1;
-      return this.perdeuORosto ? null : this.caixa;
-    }
-
-    const deteccoes = resultado?.detections ?? [];
-    if (deteccoes.length === 0) {
+    if (!medida) {
       this.quadrosSemRosto += 1;
       if (this.caixa && !this.perdeuORosto) return this.caixa;
       this.caixa = null;
-      this.olhos = null;
       return null;
     }
 
-    // O maior rosto do quadro: quem está sendo medido é quem está mais perto.
-    const largura = video.videoWidth || 1;
-    const altura = video.videoHeight || 1;
-    let melhor = null;
-    let maiorArea = -1;
-    for (const deteccao of deteccoes) {
-      const cb = deteccao.boundingBox;
-      if (!cb) continue;
-      const area = (cb.width || 0) * (cb.height || 0);
-      if (area > maiorArea) {
-        maiorArea = area;
-        melhor = deteccao;
-      }
-    }
-    if (!melhor) {
-      this.quadrosSemRosto += 1;
-      return this.perdeuORosto ? null : this.caixa;
-    }
-
-    const cb = melhor.boundingBox;
-    const nova = {
-      x: cb.originX / largura,
-      y: cb.originY / altura,
-      largura: cb.width / largura,
-      altura: cb.height / altura,
-    };
-
-    if (this.caixa && saltoAbsurdo(this.caixa, nova)) {
-      this.deteccoesRejeitadas += 1;
+    if (this.caixa && saltoAbsurdo(this.caixa, medida)) {
+      this.saltosRejeitados += 1;
       this.quadrosSemRosto += 1;
       if (!this.perdeuORosto) return this.caixa;
     }
 
     this.quadrosSemRosto = 0;
-    this.caixa = this.caixa ? interpolar(this.caixa, nova, SUAVIZACAO) : nova;
-
-    // Os pontos do BlazeFace já vêm normalizados de 0 a 1.
-    const pontos = melhor.keypoints;
-    if (pontos && pontos.length >= 2) {
-      const esquerdo = pontos[PONTOS.OLHO_ESQUERDO];
-      const direito = pontos[PONTOS.OLHO_DIREITO];
-      if (esquerdo && direito) {
-        const novosOlhos = {
-          esquerdo: { x: esquerdo.x, y: esquerdo.y },
-          direito: { x: direito.x, y: direito.y },
-        };
-        this.olhos = this.olhos
-          ? {
-              esquerdo: {
-                x: this.olhos.esquerdo.x + (novosOlhos.esquerdo.x - this.olhos.esquerdo.x) * SUAVIZACAO,
-                y: this.olhos.esquerdo.y + (novosOlhos.esquerdo.y - this.olhos.esquerdo.y) * SUAVIZACAO,
-              },
-              direito: {
-                x: this.olhos.direito.x + (novosOlhos.direito.x - this.olhos.direito.x) * SUAVIZACAO,
-                y: this.olhos.direito.y + (novosOlhos.direito.y - this.olhos.direito.y) * SUAVIZACAO,
-              },
-            }
-          : novosOlhos;
-      }
-    }
-
+    this.caixa = this.caixa
+      ? interpolar(this.caixa, medida, this.suavizacao)
+      : medida;
     return this.caixa;
   }
 
-  fechar() {
-    try {
-      this.detector?.close();
-    } catch {
-      /* fechar duas vezes não deve derrubar a página */
-    }
-    this.detector = null;
-    this.disponivel = false;
+  /** Regiões de interesse do quadro atual. */
+  regioes() {
+    return regioesDaCaixa(this.caixa);
   }
-}
-
-/**
- * Regiões de interesse ancoradas nos olhos, em frações do quadro.
- *
- * As proporções são as mesmas da versão em Python, de propósito: as duas
- * implementações precisam medir a mesma coisa para que os números sejam
- * comparáveis entre elas.
- *
- * A distância entre os olhos é a unidade de medida, e não a caixa do rosto. A
- * razão é prática: a caixa do detector muda de tamanho conforme a confiança e
- * o enquadramento, enquanto a distância interocular é uma medida anatômica
- * estável. Ancorar na caixa faria as regiões respirarem junto com o detector.
- *
- * Boca e olhos ficam fora. Piscar e falar produzem movimento exatamente na
- * banda de frequência do coração, e esse artefato nenhuma filtragem remove.
- */
-export function regioesAncoradas(olhos) {
-  if (!olhos) return null;
-  const { esquerdo, direito } = olhos;
-
-  const dx = direito.x - esquerdo.x;
-  const dy = direito.y - esquerdo.y;
-  const distancia = Math.hypot(dx, dy);
-  if (!(distancia > 1e-6)) return null;
-
-  const centroX = (esquerdo.x + direito.x) / 2;
-  const centroY = (esquerdo.y + direito.y) / 2;
-
-  // Testa: acima da linha dos olhos, centrada, com largura de 1,1 interocular.
-  const testa = {
-    x: centroX - distancia * 0.55,
-    y: centroY - distancia * 0.95,
-    largura: distancia * 1.1,
-    altura: distancia * 0.45,
-  };
-
-  // Bochechas: abaixo e para fora, evitando a boca.
-  const larguraBochecha = distancia * 0.52;
-  const alturaBochecha = distancia * 0.46;
-  const bochechaEsquerda = {
-    x: esquerdo.x - larguraBochecha * 0.62,
-    y: centroY + distancia * 0.32,
-    largura: larguraBochecha,
-    altura: alturaBochecha,
-  };
-  const bochechaDireita = {
-    x: direito.x - larguraBochecha * 0.38,
-    y: centroY + distancia * 0.32,
-    largura: larguraBochecha,
-    altura: alturaBochecha,
-  };
-
-  return [testa, bochechaEsquerda, bochechaDireita].map(limitar);
-}
-
-/** Recorta a região para dentro do quadro, devolvendo null se sobrar nada. */
-function limitar(regiao) {
-  const x = Math.max(0, Math.min(1, regiao.x));
-  const y = Math.max(0, Math.min(1, regiao.y));
-  const largura = Math.max(0, Math.min(1 - x, regiao.largura));
-  const altura = Math.max(0, Math.min(1 - y, regiao.altura));
-  return { x, y, largura, altura };
 }
 
 /**
  * Faixas de fundo que não encostam no rosto rastreado.
  *
- * Na versão com oval fixo, o fundo eram duas faixas laterais fixas, e isso
- * funcionava porque o rosto estava sempre no meio. Com o rosto se movendo, uma
- * faixa fixa pode acabar em cima dele, e aí a referência de iluminação passa a
- * conter pulso, que é o oposto do que ela serve para fazer.
+ * Com o oval fixo, o fundo eram duas faixas laterais fixas, e isso funcionava
+ * porque o rosto estava sempre no meio. Com o rosto se movendo, uma faixa fixa
+ * pode acabar em cima dele, e aí a referência de iluminação passa a conter
+ * pulso, que é o oposto do que ela serve para fazer.
  *
- * Aqui as faixas são escolhidas do lado oposto a onde o rosto está.
+ * Devolver lista vazia é resposta legítima: sem fundo utilizável, o medidor
+ * mede sem rectificação, o que é melhor que rectificar por uma referência que
+ * é pele.
  */
 export function regioesDeFundo(caixaRosto) {
   const LARGURA = 0.13;
+  const FOLGA = 0.03;
+
   if (!caixaRosto) {
     return [
       { x: 0, y: 0, largura: LARGURA, altura: 1 },
@@ -360,17 +322,19 @@ export function regioesDeFundo(caixaRosto) {
   }
 
   const faixas = [];
-  const folga = 0.03;
-  if (caixaRosto.x > LARGURA + folga) {
+  if (caixaRosto.x > LARGURA + FOLGA) {
     faixas.push({ x: 0, y: 0, largura: LARGURA, altura: 1 });
   }
-  const direitaDoRosto = caixaRosto.x + caixaRosto.largura;
-  if (direitaDoRosto < 1 - LARGURA - folga) {
+  if (caixaRosto.x + caixaRosto.largura < 1 - LARGURA - FOLGA) {
     faixas.push({ x: 1 - LARGURA, y: 0, largura: LARGURA, altura: 1 });
   }
-  // Rosto ocupando a largura inteira: usa a faixa do topo, acima da testa.
   if (faixas.length === 0 && caixaRosto.y > 0.12) {
-    faixas.push({ x: 0, y: 0, largura: 1, altura: Math.min(0.1, caixaRosto.y - 0.02) });
+    faixas.push({
+      x: 0,
+      y: 0,
+      largura: 1,
+      altura: Math.min(0.1, caixaRosto.y - 0.02),
+    });
   }
   return faixas;
 }
