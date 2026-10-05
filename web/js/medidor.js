@@ -151,18 +151,37 @@ export function medirFundo(contexto, largura, altura, passo = 4, caixaRosto = nu
   let somaB = 0;
   let usados = 0;
 
-  // Retângulo do rosto a excluir, com 15% de margem em cada lado.
+  /*
+    A região excluída é a **pessoa**, não só o rosto.
+
+    A primeira versão excluía a caixa do rosto com 15% de margem, e piorou a
+    medição de forma mensurável: num enquadramento com roupão claro ocupando
+    metade do quadro, a dispersão entre janelas foi de 0,10 para 10,12 bpm e a
+    relação sinal-ruído de -0,9 para -5,8 dB.
+
+    A causa é direta quando se olha: ombros e roupa **se movem com a pessoa**.
+    Uma referência de iluminação que contém movimento do próprio sujeito deixa
+    de ser referência de iluminação. O filtro de pele não pega isso, porque
+    roupa não é pele.
+
+    A correção usa um prior geométrico banal e confiável: o corpo fica **abaixo
+    e em volta** da cabeça. Exclui-se uma faixa larga em torno do rosto e tudo
+    que está abaixo dele até a base do quadro. O que sobra são os cantos de
+    cima e as laterais altas, que é parede e móvel.
+  */
   let ex0 = -1;
   let ey0 = -1;
   let ex1 = -1;
   let ey1 = -1;
   if (caixaRosto) {
-    const mx = caixaRosto.largura * 0.15;
-    const my = caixaRosto.altura * 0.15;
+    // Três quartos da largura do rosto para cada lado cobre ombro de adulto
+    // em enquadramento de meio corpo.
+    const mx = caixaRosto.largura * 0.75;
     ex0 = Math.floor((caixaRosto.x - mx) * largura);
-    ey0 = Math.floor((caixaRosto.y - my) * altura);
     ex1 = Math.ceil((caixaRosto.x + caixaRosto.largura + mx) * largura);
-    ey1 = Math.ceil((caixaRosto.y + caixaRosto.altura + my) * altura);
+    // Para cima só o cabelo; para baixo, tudo, porque é onde o corpo está.
+    ey0 = Math.floor((caixaRosto.y - caixaRosto.altura * 0.35) * altura);
+    ey1 = altura;
   }
 
   const dados = contexto.getImageData(0, 0, largura, altura).data;
@@ -519,17 +538,57 @@ export class Medidor {
     // passou a dizer se ela foi aplicada: antes, uma janela sem correção era
     // indistinguível de uma com, e a diferença entre as duas foi medida em
     // 1 acerto em 16 contra 16 em 16 sob balanço de branco oscilante.
-    this.fundoAplicado = this.usarFundo && this.amostras.every((a) => a.fundo);
-    if (this.fundoAplicado) {
-      serie = rectificarPeloFundo(serie, {
+    const temFundo = this.usarFundo && this.amostras.every((a) => a.fundo);
+
+    /*
+      A correção é **medida**, não assumida.
+
+      Ela foi criada para cancelar o controle automático da câmera, e nisso
+      funciona: medida antes, levou os acertos de 1 em 16 para 16 em 16 sob
+      balanço de branco oscilando. Mas ela depende de a referência ser de fato
+      iluminação, e isso não se garante por construção.
+
+      Num enquadramento com roupão claro ocupando metade do quadro, aplicá-la
+      **piorou**: dispersão de 0,10 para 10,12 bpm e relação sinal-ruído de -0,9
+      para -5,8 dB. A causa era a referência conter ombro e roupa, que se movem
+      com a pessoa.
+
+      Em vez de escolher um dos dois lados e esperar que a cena colabore, as
+      duas versões são calculadas e **a de melhor relação sinal-ruído vence**. É
+      o mesmo critério que o sistema já usa para aceitar ou recusar uma janela,
+      e custa um espectro a mais, que é barato perto de errar o número.
+    */
+    const semFundo = extrairPulso(serie, fps, this.algoritmo, BANDA.minHz, BANDA.maxHz);
+    const avaliacaoSemFundo = estimarFrequencia(semFundo, fps, BANDA.minHz, BANDA.maxHz);
+
+    let pulso = semFundo;
+    let resultado = avaliacaoSemFundo;
+    this.fundoAplicado = false;
+
+    if (temFundo) {
+      const corrigida = rectificarPeloFundo(serie, {
         vermelho: this.amostras.map((a) => a.fundo.vermelho),
         verde: this.amostras.map((a) => a.fundo.verde),
         azul: this.amostras.map((a) => a.fundo.azul),
       });
+      const comFundo = extrairPulso(corrigida, fps, this.algoritmo, BANDA.minHz, BANDA.maxHz);
+      const avaliacaoComFundo = estimarFrequencia(comFundo, fps, BANDA.minHz, BANDA.maxHz);
+
+      const melhorComFundo = avaliacaoComFundo
+        && (!avaliacaoSemFundo || avaliacaoComFundo.snrDb > avaliacaoSemFundo.snrDb);
+
+      if (melhorComFundo) {
+        pulso = comFundo;
+        resultado = avaliacaoComFundo;
+        this.fundoAplicado = true;
+      }
+      this.ganhoDoFundo = avaliacaoComFundo && avaliacaoSemFundo
+        ? avaliacaoComFundo.snrDb - avaliacaoSemFundo.snrDb
+        : NaN;
+    } else {
+      this.ganhoDoFundo = NaN;
     }
 
-    const pulso = extrairPulso(serie, fps, this.algoritmo, BANDA.minHz, BANDA.maxHz);
-    const resultado = estimarFrequencia(pulso, fps, BANDA.minHz, BANDA.maxHz);
     if (!resultado) return null;
 
     // O número exibido vem do espectro médio, não de suavizar estimativas. A
@@ -557,6 +616,10 @@ export class Medidor {
       janelas: this.historico.length,
       fundoAplicado: this.fundoAplicado,
       quadrosSemFundo: this.quadrosSemFundo,
+      // Quanto a correção melhorou, em dB. Negativo quer dizer que ela piorou e
+      // foi descartada nesta janela, e é informação útil: diz que a referência
+      // de iluminação está contaminada pela própria pessoa.
+      ganhoDoFundo: this.ganhoDoFundo,
     };
     return this.ultimaAnalise;
   }
