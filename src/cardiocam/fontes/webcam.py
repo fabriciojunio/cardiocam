@@ -122,6 +122,36 @@ class FonteWebcam:
             )
         )
 
+    # Valores que significam "exposição manual" em cada convenção de backend.
+    #
+    # 0,25 é a convenção do DirectShow e do V4L2, onde 0,75 significa
+    # automático. 0 é a do Media Foundation, onde 1 significa automático.
+    #
+    # A ordem importa e a ausência do 1,0 é deliberada: a versão anterior desta
+    # função tentava (0.25, 0.0, 1.0), e 1,0 **liga** a exposição automática no
+    # Media Foundation, que é o primeiro backend tentado no Windows. Era o
+    # oposto do objetivo da função, na câmera mais comum do público do projeto.
+    VALORES_DE_EXPOSICAO_MANUAL = (0.25, 0.0)
+
+    @staticmethod
+    def _confirmou(captura: cv2.VideoCapture, propriedade: int, desejado: float) -> bool:
+        """Grava a propriedade e confere lendo de volta.
+
+        `set` devolve verdadeiro quando o backend aceitou a chamada, e isso não
+        quer dizer que o valor pegou: há relato de sobra de câmera que aceita a
+        chamada e ignora o pedido, e o comportamento varia entre DirectShow e
+        Media Foundation. A versão anterior confiava no retorno de `set` e
+        parava no primeiro verdadeiro, então anunciava "automáticos travados"
+        sem ter travado nada, e a interface repetia a mentira para o usuário.
+
+        Comparação com tolerância porque alguns backends devolvem o valor
+        quantizado, por exemplo 0,25 lido como 0,249.
+        """
+        if not captura.set(propriedade, desejado):
+            return False
+        lido = captura.get(propriedade)
+        return abs(float(lido) - desejado) < 0.05
+
     def travar_ajustes_automaticos(self, captura: cv2.VideoCapture) -> dict[str, bool]:
         """Tenta desligar exposição e balanço de branco automáticos.
 
@@ -133,22 +163,28 @@ class FonteWebcam:
         variação de cor que os métodos cromáticos não conseguem cancelar, já que
         eles supõem distorção igual nos três canais.
 
-        A tentativa é feita com as duas convenções em uso, porque o valor que
-        significa "manual" muda entre backends: o DirectShow espera 0,25 e o
-        Media Foundation espera 0.
-
-        Muitas webcams simplesmente não expõem esses controles, e nesse caso
-        todas as chamadas falham. Não é erro: devolvemos o que foi possível
-        aplicar para que a interface possa avisar, e a rectificação por
-        referência de fundo continua cobrindo o caso.
+        Muitas webcams simplesmente não expõem esses controles. Não é erro:
+        devolvemos **só o que foi confirmado por leitura de volta**, para que a
+        interface possa avisar que a medição vai depender da rectificação por
+        referência de fundo.
         """
         aplicado = {"exposicao": False, "balanco_de_branco": False}
 
-        for valor in (0.25, 0.0, 1.0):
-            if captura.set(cv2.CAP_PROP_AUTO_EXPOSURE, valor):
+        for valor in self.VALORES_DE_EXPOSICAO_MANUAL:
+            if self._confirmou(captura, cv2.CAP_PROP_AUTO_EXPOSURE, valor):
                 aplicado["exposicao"] = True
                 break
-        if captura.set(cv2.CAP_PROP_AUTO_WB, 0):
+
+        if aplicado["exposicao"]:
+            # Passar para manual sem fixar um tempo de exposição deixa a câmera
+            # no último valor que o automático escolheu, que pode ser o de um
+            # quadro em que a cena ainda estava escura. Fixar um valor do meio
+            # da faixa evita abrir a sessão com a imagem estourada ou preta.
+            atual = captura.get(cv2.CAP_PROP_EXPOSURE)
+            if atual == 0.0:
+                captura.set(cv2.CAP_PROP_EXPOSURE, -6.0)
+
+        if self._confirmou(captura, cv2.CAP_PROP_AUTO_WB, 0.0):
             aplicado["balanco_de_branco"] = True
 
         return aplicado
