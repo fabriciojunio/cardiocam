@@ -167,10 +167,24 @@ function garantirModelo() {
  * `ideal` e não `exact`: câmera que não entrega a resolução entrega a mais
  * próxima, em vez de recusar a abertura.
  */
+/**
+ * Taxa de quadros pedida, com **teto** e não só preferência.
+ *
+ * O teto é o ponto, e ele vale luz. A banda cardíaca vai até 3,3 Hz, então 30
+ * quadros por segundo já dão nove vezes a taxa de Nyquist: 60 não acrescenta
+ * informação nenhuma sobre o pulso.
+ *
+ * E custa. A 60 quadros a câmera não pode expor cada quadro por mais de 16 ms;
+ * a 30, pode por 33. **Metade da taxa é o dobro da luz**, e luz é exatamente o
+ * que falta numa medição em sala comum. Sem o teto, a câmera escolhe 60 porque
+ * o navegador trata taxa alta como qualidade, que aqui é o critério errado.
+ */
+const TAXA_ALVO = Object.freeze({ ideal: 30, max: 30 });
+
 const DEGRAUS_DE_QUALIDADE = Object.freeze([
-  { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
-  { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
-  { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } },
+  { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: TAXA_ALVO },
+  { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: TAXA_ALVO },
+  { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: TAXA_ALVO },
 ]);
 
 /** O degrau em uso. Começa no melhor e desce sozinho se a máquina não aguentar. */
@@ -766,10 +780,44 @@ async function subirResolucaoSePuder(trilha) {
  * Poucos navegadores expõem esses controles, e em desktop quase nenhum. Quando
  * não dá, a rectificação por referência de fundo cobre boa parte do problema.
  */
+/**
+ * Luminância alvo da pele, de 0 a 255.
+ *
+ * Abaixo de 60 o pulso, que vale 0,1% a 1% da intensidade, fica menor que um
+ * nível inteiro, e o sensor entrega inteiros. 110 dá folga confortável sem
+ * chegar perto de estourar a pele, que começa a saturar por volta de 200 e aí
+ * perde a modulação inteira.
+ */
+const LUMINANCIA_ALVO = 110;
+
+/**
+ * Trava exposição e balanço de branco, **depois de deixar a imagem clara**.
+ *
+ * A versão anterior fazia só a metade disto, e a metade que faltava era a que
+ * aparecia na tela. Ela punha `exposureMode: 'manual'` sem definir tempo de
+ * exposição, então a câmera congelava no valor que tivesse no instante da
+ * abertura. Num quarto com luz de teto isso é um valor escuro, e a imagem
+ * ficava escura o resto da sessão.
+ *
+ * O travamento precisa existir: exposição automática clareia a imagem
+ * justamente quando a pele escurece por causa do pulso, apagando o sinal. Mas
+ * travar no escuro troca um problema por outro pior, porque com pouca luz o
+ * pulso não chega a existir no sinal.
+ *
+ * A sequência aqui resolve os dois: deixa o automático assentar, lê o tempo de
+ * exposição que ele escolheu, trava, e então **sobe o tempo até a pele chegar
+ * na luminância alvo**. É malha fechada com alvo medido, e não um valor fixo
+ * que funcionaria só numa sala.
+ */
 async function travarAjustesAutomaticos() {
   try {
     const trilha = fluxo?.getVideoTracks?.()[0];
     if (!trilha?.getCapabilities) return false;
+
+    // Deixa o automático assentar antes de olhar o que ele escolheu. Travar no
+    // primeiro quadro pega a câmera ainda no valor de inicialização.
+    await espera(700);
+
     const capacidades = trilha.getCapabilities();
     const avancado = [];
     if (capacidades.exposureMode?.includes('manual')) avancado.push({ exposureMode: 'manual' });
@@ -777,11 +825,93 @@ async function travarAjustesAutomaticos() {
       avancado.push({ whiteBalanceMode: 'manual' });
     }
     if (!avancado.length) return false;
+
     await trilha.applyConstraints({ advanced: avancado });
+    await clarearAteOAlvo(trilha, capacidades);
     return true;
   } catch {
     // Falhar aqui é rotina e não deve interromper a medição.
     return false;
+  }
+}
+
+/** Luminância média do quadro atual, pela conversão BT.601. */
+function luminanciaDoQuadro() {
+  const video = el.video;
+  if (!video?.videoWidth) return NaN;
+
+  const l = 64;
+  const a = Math.max(1, Math.round((video.videoHeight / video.videoWidth) * l));
+  const canvas = document.createElement('canvas');
+  canvas.width = l;
+  canvas.height = a;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(video, 0, 0, l, a);
+
+  const dados = ctx.getImageData(0, 0, l, a).data;
+  let soma = 0;
+  let n = 0;
+  // Só o terço central: as bordas costumam ter parede e janela, e deixar a
+  // janela puxar a média faria o controle escurecer o rosto para não estourar
+  // o fundo, que é o erro clássico de medição de luz por quadro inteiro.
+  const x0 = Math.floor(l / 3);
+  const x1 = Math.ceil((2 * l) / 3);
+  const y0 = Math.floor(a / 4);
+  const y1 = Math.ceil((3 * a) / 4);
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const i = (y * l + x) * 4;
+      soma += 0.299 * dados[i] + 0.587 * dados[i + 1] + 0.114 * dados[i + 2];
+      n += 1;
+    }
+  }
+  return n ? soma / n : NaN;
+}
+
+/**
+ * Sobe o tempo de exposição até a imagem chegar na luminância alvo.
+ *
+ * Busca proporcional e com poucos passos de propósito: a resposta da câmera não
+ * é linear nem conhecida, e cada passo custa um quadro para surtir efeito.
+ * Cinco passos levam de uma imagem bem escura ao alvo, e parar cedo é melhor
+ * que oscilar em volta dele.
+ *
+ * Quando a câmera não expõe `exposureTime`, tenta `brightness`, que algumas
+ * expõem no lugar. Não conseguindo nenhum dos dois, a medição segue com o que
+ * houver: a mensagem de luz na tela cobre esse caso.
+ */
+async function clarearAteOAlvo(trilha, capacidades) {
+  const temExposicao = Boolean(capacidades.exposureTime);
+  const temBrilho = Boolean(capacidades.brightness);
+  if (!temExposicao && !temBrilho) return;
+
+  const faixa = temExposicao ? capacidades.exposureTime : capacidades.brightness;
+  const propriedade = temExposicao ? 'exposureTime' : 'brightness';
+  const minimo = faixa.min ?? 0;
+  const maximo = faixa.max ?? 0;
+  if (!(maximo > minimo)) return;
+
+  for (let passo = 0; passo < 5; passo++) {
+    const luz = luminanciaDoQuadro();
+    if (!Number.isFinite(luz) || luz >= LUMINANCIA_ALVO) return;
+
+    const ajustes = trilha.getSettings?.() ?? {};
+    const atual = ajustes[propriedade] ?? minimo;
+
+    // Proporcional ao quanto falta, com teto de 2,5x por passo: subir demais de
+    // uma vez estoura a pele, e pele estourada perde a modulação inteira, que é
+    // uma falha pior que a imagem escura.
+    const fator = Math.min(2.5, Math.max(1.2, LUMINANCIA_ALVO / Math.max(luz, 1)));
+    const alvo = Math.min(maximo, Math.max(minimo, atual * fator));
+    if (!(alvo > atual)) return;
+
+    try {
+      await trilha.applyConstraints({ advanced: [{ [propriedade]: alvo }] });
+    } catch {
+      return;
+    }
+    // A mudança leva alguns quadros para aparecer na imagem.
+    await espera(220);
   }
 }
 
