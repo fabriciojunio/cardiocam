@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Rastreamento do rosto: localização estável ao longo do tempo.
  *
  * ## O caminho até aqui, porque as duas tentativas anteriores ensinaram algo
@@ -193,41 +193,3 @@ export class RastreadorDeRosto {
   }
 }
 
-/**
- * Faixas de fundo que não encostam no rosto.
- *
- * O fundo serve de referência de iluminação, e só vale se não tiver pulso. Com
- * o rosto se movendo, uma faixa fixa pode acabar em cima dele, e aí a correção
- * passa a injetar o sinal que deveria remover.
- *
- * Devolver lista vazia é resposta legítima: sem fundo utilizável o medidor mede
- * sem rectificação, o que é melhor que rectificar por uma referência que é pele.
- */
-export function regioesDeFundo(caixaRosto) {
-  const LARGURA = 0.13;
-  const FOLGA = 0.03;
-
-  if (!caixaRosto) {
-    return [
-      { x: 0, y: 0, largura: LARGURA, altura: 1 },
-      { x: 1 - LARGURA, y: 0, largura: LARGURA, altura: 1 },
-    ];
-  }
-
-  const faixas = [];
-  if (caixaRosto.x > LARGURA + FOLGA) {
-    faixas.push({ x: 0, y: 0, largura: LARGURA, altura: 1 });
-  }
-  if (caixaRosto.x + caixaRosto.largura < 1 - LARGURA - FOLGA) {
-    faixas.push({ x: 1 - LARGURA, y: 0, largura: LARGURA, altura: 1 });
-  }
-  if (faixas.length === 0 && caixaRosto.y > 0.12) {
-    faixas.push({
-      x: 0,
-      y: 0,
-      largura: 1,
-      altura: Math.min(0.1, caixaRosto.y - 0.02),
-    });
-  }
-  return faixas;
-}
