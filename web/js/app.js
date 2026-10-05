@@ -170,16 +170,28 @@ function garantirModelo() {
 /**
  * Taxa de quadros pedida, com **teto** e não só preferência.
  *
- * O teto é o ponto, e ele vale luz. A banda cardíaca vai até 3,3 Hz, então 30
- * quadros por segundo já dão nove vezes a taxa de Nyquist: 60 não acrescenta
- * informação nenhuma sobre o pulso.
+ * O teto é o ponto, e ele vale luz. A câmera não pode expor um quadro por mais
+ * tempo que o intervalo entre quadros: a 60 por segundo o limite é 16 ms, a 30
+ * é 33 ms, a 20 é 50 ms. **Menos quadros é mais luz**, e luz é exatamente o que
+ * falta para medir em sala comum.
  *
- * E custa. A 60 quadros a câmera não pode expor cada quadro por mais de 16 ms;
- * a 30, pode por 33. **Metade da taxa é o dobro da luz**, e luz é exatamente o
- * que falta numa medição em sala comum. Sem o teto, a câmera escolhe 60 porque
- * o navegador trata taxa alta como qualidade, que aqui é o critério errado.
+ * O número vem da literatura e não de tentativa. Odinaev et al. (CVPRW 2023)
+ * mediram o ajuste de exposição para medição de sinal vital por câmera e
+ * acharam o ótimo em **1/16 de segundo**, isto é, 62 ms, concluindo que maior
+ * tempo de exposição se associa a maior correlação com o fotopletismógrafo de
+ * contato em pouca luz. Com ajuste manual de ganho e exposição, a medição
+ * funciona com iluminância de até 25 lux.
+ *
+ * A revisão sistemática da área dá **19,9 quadros por segundo como o mínimo
+ * absoluto**. Pedir 20 com teto em 24 fica acima desse piso e permite exposição
+ * perto do ótimo. Para a banda cardíaca, que vai a 3,3 Hz, 20 por segundo ainda
+ * são três vezes a taxa de Nyquist.
+ *
+ * Sem o teto a câmera escolhe 60, porque o navegador trata taxa alta como
+ * qualidade. Aqui esse é o critério errado: taxa alta compra uma resolução
+ * temporal que o pulso não usa, e paga com a luz que ele precisa.
  */
-const TAXA_ALVO = Object.freeze({ ideal: 30, max: 30 });
+const TAXA_ALVO = Object.freeze({ ideal: 20, max: 24 });
 
 const DEGRAUS_DE_QUALIDADE = Object.freeze([
   { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: TAXA_ALVO },
@@ -191,14 +203,17 @@ const DEGRAUS_DE_QUALIDADE = Object.freeze([
 let degrauAtual = 0;
 
 /**
- * Taxa de quadros abaixo da qual vale descer um degrau.
+ * Taxa de quadros abaixo da qual vale descer um degrau de resolução.
  *
- * 20 por segundo é folgado para a banda cardíaca, que vai a 3,3 Hz: o limite
- * de Nyquist pediria 6,6. O valor não está aqui por causa de Nyquist, e sim
- * porque taxa abaixo disso costuma significar que a máquina está perdendo
- * quadros, e quadro perdido é amostra faltando em instante irregular.
+ * Desceu de 20 para 14 quando a taxa pedida passou a ser 20: reprovar a 20
+ * quando se pede 20 derrubaria a resolução em toda medição.
+ *
+ * O valor não vem de Nyquist, que para 3,3 Hz pediria 6,6. Vem de que taxa
+ * abaixo disso costuma significar que a máquina está **perdendo** quadros, e
+ * quadro perdido é amostra faltando em instante irregular, que é o que mais
+ * atrapalha a análise espectral.
  */
-const QUADROS_MINIMOS_ACEITAVEIS = 20;
+const QUADROS_MINIMOS_ACEITAVEIS = 14;
 
 /**
  * Quadros processados antes de julgar o desempenho.
