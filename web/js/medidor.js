@@ -78,13 +78,13 @@ export const REGIOES_FUNDO = [
  * Se um braço ou outra pessoa entrar na faixa lateral, esses pixels teriam
  * pulso e contaminariam a referência.
  */
-export function medirFundo(contexto, largura, altura, passo = 3) {
+export function medirFundo(contexto, largura, altura, passo = 3, faixas = REGIOES_FUNDO) {
   let somaR = 0;
   let somaG = 0;
   let somaB = 0;
   let usados = 0;
 
-  for (const regiao of REGIOES_FUNDO) {
+  for (const regiao of faixas) {
     const rx = Math.round(regiao.x * largura);
     const ry = Math.round(regiao.y * altura);
     const rl = Math.max(1, Math.round(regiao.largura * largura));
@@ -227,9 +227,27 @@ export class Medidor {
 
   /**
    * Consome um quadro já desenhado num canvas.
+   *
+   * `regioes` e `faixasDeFundo` são opcionais e, quando omitidos, caem nas
+   * constantes do contorno fixo. É assim que as duas formas de medir convivem
+   * no mesmo medidor: com o rastreador de rosto ligado, quem chama passa as
+   * regiões ancoradas nos olhos e elas acompanham a pessoa; sem ele, valem as
+   * posições fixas e a pessoa é que se encaixa no contorno.
+   *
+   * O padrão continua sendo o fixo de propósito. Assim o medidor não depende
+   * de rede nem de modelo baixado para funcionar, e o modo automático é um
+   * acréscimo em cima de algo que já funciona sozinho.
+   *
    * @returns {object} estado para a interface
    */
-  processarQuadro(contexto, largura, altura, instanteS) {
+  processarQuadro(
+    contexto,
+    largura,
+    altura,
+    instanteS,
+    regioes = REGIOES,
+    faixasDeFundo = REGIOES_FUNDO,
+  ) {
     if (this.inicio === null) this.inicio = instanteS;
 
     if (this.modo === 'dedo') return this._processarDedo(contexto, largura, altura, instanteS);
@@ -240,7 +258,7 @@ export class Medidor {
     let pesoTotal = 0;
     let proporcaoPele = 0;
 
-    for (const regiao of REGIOES) {
+    for (const regiao of regioes) {
       const rx = Math.round(regiao.x * largura);
       const ry = Math.round(regiao.y * altura);
       const rl = Math.max(1, Math.round(regiao.largura * largura));
@@ -267,11 +285,22 @@ export class Medidor {
         this.bpmSuavizado = null;
         this.ultimaAnalise = null;
       }
-      return { temPele: false, mensagem: 'Encaixe o rosto no contorno.', progresso: this.progresso };
+      // A mensagem depende de quem escolheu a região: no modo automático pedir
+      // para "encaixar no contorno" confunde, porque não há contorno na tela.
+      const automatico = regioes !== REGIOES;
+      return {
+        temPele: false,
+        mensagem: automatico
+          ? 'Rosto não localizado. Olhe para a câmera.'
+          : 'Encaixe o rosto no contorno.',
+        progresso: this.progresso,
+      };
     }
 
     this.quadrosSemPele = 0;
-    const fundo = this.usarFundo ? medirFundo(contexto, largura, altura) : null;
+    const fundo = this.usarFundo
+      ? medirFundo(contexto, largura, altura, 3, faixasDeFundo)
+      : null;
     this.amostras.push({
       t: instanteS,
       r: somaR / pesoTotal,

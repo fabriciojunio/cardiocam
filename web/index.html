@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Cardiocam — medição de frequência cardíaca por vídeo</title>
+<title>Cardiocam: medição de frequência cardíaca por vídeo</title>
 <meta name="description" content="Mede frequência cardíaca a partir de vídeo, sem contato. Processamento local, nenhuma imagem sai do aparelho.">
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#101312">
@@ -39,14 +39,44 @@
       <span>Captura</span>
       <div class="fonte-troca">
         <button class="pilula pilula-ativa" id="btnFonteCamera">Rosto</button>
+        <button class="pilula" id="btnFonteTela" title="Mede o rosto que aparece numa janela de chamada: Teams, Meet, Zoom ou WhatsApp">Chamada</button>
         <button class="pilula" id="btnFonteDedo" title="Dedo na câmera traseira com o flash ligado">Dedo</button>
         <button class="pilula" id="btnFonteArquivo">Arquivo</button>
       </div>
     </div>
 
+    <!--
+      Consentimento para medir outra pessoa.
+
+      Fica escondido até a fonte "Chamada" ser escolhida, e bloqueia o botão de
+      iniciar enquanto não for marcado. Não é formalidade: frequência cardíaca é
+      dado de saúde, e no Brasil dado de saúde é dado pessoal sensível pela Lei
+      Geral de Proteção de Dados. Medir alguém numa reunião sem a pessoa saber é
+      o uso que esta ferramenta não deve facilitar.
+    -->
+    <div class="aviso-consentimento" id="avisoConsentimento" hidden>
+      <p class="aviso-titulo">Antes de medir outra pessoa</p>
+      <p>
+        A pessoa medida precisa saber e concordar. Frequência cardíaca é dado de
+        saúde, e medir sem consentimento não é só falta de educação: é
+        tratamento de dado pessoal sensível sem base legal.
+      </p>
+      <label class="caixa-marcar">
+        <input type="checkbox" id="chkConsentimento">
+        <span>A pessoa que vou medir sabe e concordou.</span>
+      </label>
+      <p class="fraco" id="ressalvaCompressao"></p>
+    </div>
+
     <div class="palco" id="palco">
       <video id="video" playsinline muted></video>
       <canvas id="canvasOculto" hidden></canvas>
+      <!--
+        Sobreposição das regiões medidas. Existe para que a pessoa veja que o
+        sistema está acompanhando o rosto dela, e não medindo um ponto fixo.
+        Sem isso, "pode se mover" é uma afirmação que a tela não sustenta.
+      -->
+      <canvas class="sobreposicao" id="canvasRegioes"></canvas>
 
       <div class="guia" id="guia">
         <div class="guia-oval"></div>
@@ -97,10 +127,10 @@
     </div>
 
     <dl class="grade-dados">
-      <div><dt>Relação sinal-ruído</dt><dd id="dadoSnr">—</dd></div>
-      <div><dt>Janelas analisadas</dt><dd id="dadoJanelas">—</dd></div>
-      <div><dt>Dispersão entre janelas</dt><dd id="dadoDispersao">—</dd></div>
-      <div><dt>Taxa de quadros</dt><dd id="dadoFps">—</dd></div>
+      <div><dt>Relação sinal-ruído</dt><dd id="dadoSnr">--</dd></div>
+      <div><dt>Janelas analisadas</dt><dd id="dadoJanelas">--</dd></div>
+      <div><dt>Dispersão entre janelas</dt><dd id="dadoDispersao">--</dd></div>
+      <div><dt>Taxa de quadros</dt><dd id="dadoFps">--</dd></div>
     </dl>
 
     <div class="grafico">
@@ -129,9 +159,9 @@
         <div class="campo">
           <label for="algoritmo">Algoritmo</label>
           <select id="algoritmo">
-            <option value="pos" selected>POS — plano ortogonal</option>
-            <option value="chrom">CHROM — crominância</option>
-            <option value="verde">GREEN — só canal verde</option>
+            <option value="pos" selected>POS, plano ortogonal</option>
+            <option value="chrom">CHROM, crominância</option>
+            <option value="verde">GREEN, só o canal verde</option>
           </select>
         </div>
         <div class="campo">
@@ -201,21 +231,54 @@
       sistema mede regiões inteiras da testa e das bochechas, e não pontos.
     </p>
 
-    <h2>Por que o rosto precisa ficar no contorno</h2>
+    <h2>O rosto é acompanhado, e você pode se mover</h2>
     <p>
-      Não há detecção automática de rosto nesta versão: seria preciso baixar um
-      modelo de vários megabytes. Pedir que você encaixe o rosto no contorno
-      resolve isso e ainda traz um ganho colateral. Com o rosto ancorado, a
-      região medida para de tremer entre quadros, e esse tremor é justamente o
-      que mais estraga a medição quando a detecção é automática.
+      Um detector de rosto roda dentro da página e as três regiões medidas
+      ficam ancoradas na posição dos seus olhos. Elas aparecem desenhadas sobre
+      a imagem: se as caixas estão lá, a medição está acontecendo onde deveria.
+      Movimento normal de quem está numa conversa não interrompe mais a leitura.
     </p>
     <p>
-      <strong>Alinhe os olhos na linha tracejada.</strong> É o ajuste que mais
-      importa, e não é capricho: se o rosto ficar alto demais, a região que
-      deveria medir a testa cai sobre os olhos. Piscar produz uma variação de
-      intensidade muito maior que a do pulso, e numa frequência que cai dentro
-      da banda cardíaca, onde a filtragem não consegue separar. Uma medição
-      feita com a testa mal posicionada não tem conserto depois.
+      <strong>A distância entre os olhos é a régua.</strong> Isso é o que faz as
+      regiões crescerem quando você se aproxima e acompanharem quando você vira
+      a cabeça, em vez de medirem um ponto fixo da tela. Olhos e boca ficam
+      deliberadamente de fora: piscar e falar produzem variação de intensidade
+      muito maior que a do pulso, e numa frequência que cai dentro da banda
+      cardíaca, onde nenhuma filtragem separa.
+    </p>
+    <p>
+      <strong>Se o detector não carregar</strong>, por rede bloqueada ou
+      navegador antigo, aparece o contorno oval e vale a regra antiga: encaixe o
+      rosto nele e alinhe os olhos na linha. A medição continua funcionando, só
+      exige que você fique mais parado.
+    </p>
+    <p class="fraco">
+      O que o movimento ainda atrapalha é a iluminação: virar a cabeça muda o
+      ângulo entre a pele e a luz, e isso muda a cor refletida por um motivo que
+      não é o pulso. Acompanhar o rosto resolve o problema de medir o lugar
+      certo, não o de a luz mudar. Por isso luz estável continua valendo mais
+      que ficar imóvel.
+    </p>
+
+    <h2>Medir alguém numa chamada</h2>
+    <p>
+      A fonte <strong>Chamada</strong> captura uma janela do seu computador e
+      mede o rosto que aparece nela. Funciona com Teams, Meet, Zoom, WhatsApp e
+      qualquer outro, porque não depende de nenhum: nenhuma dessas plataformas
+      entrega o vídeo dos participantes para um programa de fora.
+    </p>
+    <p>
+      <strong>É menos confiável, e a razão é física.</strong> O vídeo que chega
+      na chamada já passou por compressão, e codec de videochamada descarta
+      exatamente o que procuramos: variação sutil de cor em região de tom
+      uniforme. Em chamada com várias pessoas em mosaico, cada rosto fica com
+      poucas dezenas de pixels e a medição não fecha. Deixe o participante em
+      destaque e a janela em tela cheia.
+    </p>
+    <p>
+      <strong>A pessoa precisa saber.</strong> A página pede confirmação disso
+      antes de começar, e não é formalidade: frequência cardíaca é dado de
+      saúde.
     </p>
 
     <h2>O modo dedo</h2>
@@ -280,8 +343,18 @@
       apagar remove tudo.
     </p>
     <p>
+      <strong>Uma ressalva, porque mudou.</strong> O detector de rosto é um
+      arquivo de modelo baixado de uma rede de distribuição na primeira
+      medição. Isso é uma requisição de rede, e antes não havia nenhuma. O que
+      não mudou é o que importa: a inferência roda aqui dentro, e nenhum quadro
+      e nenhuma medição saem do aparelho em momento algum. Quem preferir zero
+      requisição pode bloquear o domínio do modelo, e a página volta ao
+      contorno oval sem perder a medição.
+    </p>
+    <p>
       Medir a frequência cardíaca de outra pessoa é tratamento de dado pessoal
-      sensível pela LGPD. Peça consentimento antes.
+      sensível pela LGPD. Peça consentimento antes. Na fonte Chamada a página
+      exige que você confirme isso.
     </p>
   </section>
 </main>

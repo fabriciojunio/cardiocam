@@ -23,6 +23,8 @@ import {
 import { extrairPulso } from '../js/rppg.js';
 import { classificarPele } from '../js/pele.js';
 import { Medidor, medirDedo, rectificarPeloFundo } from '../js/medidor.js';
+import { PONTOS, regioesAncoradas, regioesDeFundo } from '../js/rosto.js';
+import { avaliarCaptura, identificarPlataforma, LIMIARES } from '../js/tela.js';
 import {
   GANHO_CANAL,
   gerarSerieRGB,
@@ -40,7 +42,7 @@ function verificar(nome, condicao, detalhe = '') {
     passaram++;
   } else {
     falharam++;
-    falhas.push(`${nome}${detalhe ? ` — ${detalhe}` : ''}`);
+    falhas.push(`${nome}${detalhe ? `: ${detalhe}` : ''}`);
   }
 }
 
@@ -523,6 +525,203 @@ for (const [r, g, b] of TONS_DE_PELE) {
 const NAO_PELE = [[0, 0, 255], [0, 255, 0], [255, 0, 0], [20, 20, 20], [250, 250, 250], [120, 200, 90]];
 for (const [r, g, b] of NAO_PELE) {
   verificar(`cor rgb(${r},${g},${b}) rejeitada como pele`, !classificarPele(r, g, b));
+}
+
+// ---------------------------------------------------------------------------
+grupo('Regiões ancoradas nos olhos');
+
+/* Olhos centrados, separados por 20% da largura do quadro. É a geometria de
+   alguém sentado a meio metro da câmera, que é o caso de uso. */
+const OLHOS_CENTRO = {
+  esquerdo: { x: 0.40, y: 0.40 },
+  direito: { x: 0.60, y: 0.40 },
+};
+
+{
+  const regioes = regioesAncoradas(OLHOS_CENTRO);
+  verificar('devolve três regiões', regioes?.length === 3);
+
+  const [testa, bochechaE, bochechaD] = regioes;
+
+  verificar('a testa fica acima da linha dos olhos',
+    testa.y + testa.altura <= 0.40 + 1e-9,
+    `fundo da testa em ${(testa.y + testa.altura).toFixed(3)}`);
+
+  verificar('as bochechas ficam abaixo da linha dos olhos',
+    bochechaE.y > 0.40 && bochechaD.y > 0.40);
+
+  verificar('a testa é centrada entre os olhos',
+    Math.abs(testa.x + testa.largura / 2 - 0.5) < 0.01);
+
+  verificar('as duas bochechas têm o mesmo tamanho',
+    Math.abs(bochechaE.largura - bochechaD.largura) < 1e-9
+    && Math.abs(bochechaE.altura - bochechaD.altura) < 1e-9);
+
+  verificar('a bochecha esquerda fica à esquerda da direita',
+    bochechaE.x < bochechaD.x);
+
+  /* O que faz a medição funcionar com a pessoa se movendo: as regiões são
+     definidas pela distância entre os olhos, não pela posição absoluta. Mover
+     o rosto tem de deslocar as regiões sem mudar o tamanho delas. */
+  const deslocados = {
+    esquerdo: { x: 0.40 + 0.15, y: 0.40 + 0.08 },
+    direito: { x: 0.60 + 0.15, y: 0.40 + 0.08 },
+  };
+  const movidas = regioesAncoradas(deslocados);
+  verificar('mover o rosto desloca as regiões sem mudar o tamanho',
+    Math.abs(movidas[0].largura - testa.largura) < 1e-9
+    && Math.abs(movidas[0].altura - testa.altura) < 1e-9
+    && Math.abs(movidas[0].x - (testa.x + 0.15)) < 1e-9
+    && Math.abs(movidas[0].y - (testa.y + 0.08)) < 1e-9);
+
+  /* Aproximar o rosto aumenta a distância interocular, e as regiões têm de
+     crescer na mesma proporção. Sem isso, a pessoa chegando perto mediria só
+     um pedacinho da testa. */
+  const perto = {
+    esquerdo: { x: 0.30, y: 0.40 },
+    direito: { x: 0.70, y: 0.40 },
+  };
+  const ampliadas = regioesAncoradas(perto);
+  verificar('aproximar o rosto dobra o tamanho das regiões',
+    Math.abs(ampliadas[0].largura - testa.largura * 2) < 1e-9);
+
+  /* Rosto inclinado: os olhos deixam de estar na mesma altura. A testa tem de
+     acompanhar o centro, senão sai do rosto. */
+  const inclinado = {
+    esquerdo: { x: 0.40, y: 0.36 },
+    direito: { x: 0.60, y: 0.44 },
+  };
+  const giradas = regioesAncoradas(inclinado);
+  verificar('rosto inclinado mantém a testa centrada no meio dos olhos',
+    Math.abs(giradas[0].x + giradas[0].largura / 2 - 0.5) < 0.01);
+
+  verificar('olhos coincidentes não produzem região',
+    regioesAncoradas({ esquerdo: { x: 0.5, y: 0.5 }, direito: { x: 0.5, y: 0.5 } }) === null);
+
+  verificar('sem olhos não produz região', regioesAncoradas(null) === null);
+
+  /* Rosto na borda do quadro: as regiões são recortadas para dentro, e
+     nenhuma pode sair dos limites, senão `getImageData` lança. */
+  const naBorda = regioesAncoradas({
+    esquerdo: { x: 0.02, y: 0.05 },
+    direito: { x: 0.14, y: 0.05 },
+  });
+  verificar('região na borda fica dentro do quadro',
+    naBorda.every((r) => r.x >= 0 && r.y >= 0
+      && r.x + r.largura <= 1 + 1e-9 && r.y + r.altura <= 1 + 1e-9));
+}
+
+verificar('a ordem dos pontos do detector é a esperada',
+  PONTOS.OLHO_ESQUERDO === 0 && PONTOS.OLHO_DIREITO === 1 && PONTOS.NARIZ === 2);
+
+// ---------------------------------------------------------------------------
+grupo('Faixas de fundo que fogem do rosto');
+
+{
+  /* O fundo serve de referência de iluminação, e só vale se não tiver pulso.
+     Faixa fixa em cima do rosto conteria pele, e aí a correção injetaria o
+     sinal que deveria remover. */
+  const centro = { x: 0.35, y: 0.2, largura: 0.3, altura: 0.6 };
+  const faixas = regioesDeFundo(centro);
+  verificar('rosto no centro deixa as duas faixas laterais', faixas.length === 2);
+  verificar('nenhuma faixa encosta no rosto',
+    faixas.every((f) => f.x + f.largura <= centro.x || f.x >= centro.x + centro.largura));
+
+  const naEsquerda = { x: 0.02, y: 0.2, largura: 0.4, altura: 0.6 };
+  const faixasDireita = regioesDeFundo(naEsquerda);
+  verificar('rosto à esquerda deixa só a faixa da direita',
+    faixasDireita.length === 1 && faixasDireita[0].x > 0.5);
+
+  const naDireita = { x: 0.58, y: 0.2, largura: 0.4, altura: 0.6 };
+  const faixasEsquerda = regioesDeFundo(naDireita);
+  verificar('rosto à direita deixa só a faixa da esquerda',
+    faixasEsquerda.length === 1 && faixasEsquerda[0].x === 0);
+
+  /* Rosto ocupando a largura inteira, que é o caso de quem chega muito perto
+     da câmera. Sobra a faixa de cima, acima da testa. */
+  const larguraToda = { x: 0.0, y: 0.25, largura: 1.0, altura: 0.7 };
+  const faixaDeCima = regioesDeFundo(larguraToda);
+  verificar('rosto ocupando a largura inteira usa a faixa de cima',
+    faixaDeCima.length === 1 && faixaDeCima[0].altura <= 0.1);
+
+  /* Rosto ocupando o quadro todo: não há fundo utilizável, e devolver faixa
+     nenhuma é a resposta certa. O medidor então mede sem rectificação, em vez
+     de rectificar por uma referência que é pele. */
+  const quadroTodo = { x: 0, y: 0, largura: 1, altura: 1 };
+  verificar('sem fundo utilizável devolve lista vazia',
+    regioesDeFundo(quadroTodo).length === 0);
+
+  verificar('sem rosto rastreado cai nas duas faixas fixas',
+    regioesDeFundo(null).length === 2);
+}
+
+// ---------------------------------------------------------------------------
+grupo('Captura de tela para medir em chamada');
+
+function fluxoFalso(rotulo, ajustes = {}) {
+  return {
+    getVideoTracks: () => [{
+      label: rotulo,
+      getSettings: () => ajustes,
+    }],
+  };
+}
+
+verificar('reconhece a janela do Teams',
+  identificarPlataforma(fluxoFalso('Reuniao | Microsoft Teams')).chave === 'teams');
+verificar('reconhece o Google Meet',
+  identificarPlataforma(fluxoFalso('meet.google.com')).chave === 'meet');
+verificar('reconhece o Zoom',
+  identificarPlataforma(fluxoFalso('Zoom Meeting')).chave === 'zoom');
+verificar('reconhece o WhatsApp',
+  identificarPlataforma(fluxoFalso('WhatsApp')).chave === 'whatsapp');
+verificar('rótulo desconhecido não quebra',
+  identificarPlataforma(fluxoFalso('')).chave === 'desconhecida');
+verificar('fluxo nulo não quebra',
+  identificarPlataforma(null).chave === 'desconhecida');
+
+{
+  /* A ressalva da compressão não é condicional: toda plataforma de chamada
+     comprime, então o aviso vale sempre. */
+  const semNada = avaliarCaptura(null, null);
+  verificar('a ressalva da compressão aparece sempre',
+    semNada.ressalva.includes('compressão'));
+
+  const boa = avaliarCaptura(
+    fluxoFalso('Teams', { width: 1920, height: 1080, frameRate: 30 }),
+    { largura: 0.2 },  // rosto com 384 px numa captura de 1920
+  );
+  verificar('captura boa não gera aviso', boa.avisos.length === 0,
+    boa.avisos.join(' | '));
+
+  const lenta = avaliarCaptura(
+    fluxoFalso('Teams', { width: 1280, height: 720, frameRate: 8 }),
+    null,
+  );
+  verificar('taxa de quadros baixa gera aviso',
+    lenta.avisos.some((a) => a.includes('quadros por segundo')));
+
+  const pequena = avaliarCaptura(
+    fluxoFalso('Teams', { width: 240, height: 180, frameRate: 30 }),
+    null,
+  );
+  verificar('janela pequena gera aviso',
+    pequena.avisos.some((a) => a.includes('pequena')));
+
+  /* O caso que mais acontece de verdade: chamada em mosaico, com oito pessoas
+     na tela. Cada rosto fica com poucas dezenas de pixels, e aí a média
+     espacial não tem pixels suficientes para tirar o pulso do ruído. */
+  const mosaico = avaliarCaptura(
+    fluxoFalso('Teams', { width: 1280, height: 720, frameRate: 30 }),
+    { largura: 0.05 },  // rosto com 64 px
+  );
+  verificar('rosto pequeno demais na captura gera aviso',
+    mosaico.avisos.some((a) => a.includes('pixels de largura')));
+
+  verificar('o limiar de largura do rosto é o documentado',
+    LIMIARES.larguraMinimaDoRosto === 100);
+  verificar('o limiar de taxa de quadros respeita Nyquist para 4 Hz',
+    LIMIARES.quadrosPorSegundoMinimo >= 2 * 3.3);
 }
 
 // ---------------------------------------------------------------------------
