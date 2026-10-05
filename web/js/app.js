@@ -770,13 +770,26 @@ async function subirResolucaoSePuder(trilha) {
     await trilha.applyConstraints({
       width: { ideal: alvoLargura },
       height: { ideal: alvoAltura },
-      frameRate: { ideal: 30, min: 15 },
+      // O mesmo teto da abertura, e não um valor próprio.
+      //
+      // Esta chamada tinha `frameRate: { ideal: 30, min: 15 }` e **desfazia** o
+      // teto de 20 aplicado ao abrir a câmera: a captura voltava para 60
+      // quadros por segundo, e com ela o limite de 16 ms de exposição que a
+      // mudança existia para remover. O sintoma era não mudar nada, que é o
+      // pior: parece que a hipótese estava errada quando o que estava errado
+      // era a segunda chamada contradizendo a primeira.
+      frameRate: TAXA_ALVO,
     });
   } catch {
     // Combinação recusada: tenta só a largura, que é o que mais importa para a
-    // promediação. Altura o navegador deriva pela proporção do sensor.
+    // promediação. Altura o navegador deriva pela proporção do sensor. A taxa
+    // vai junto, porque sem ela a câmera volta para a taxa máxima e perde o
+    // tempo de exposição.
     try {
-      await trilha.applyConstraints({ width: { ideal: alvoLargura } });
+      await trilha.applyConstraints({
+        width: { ideal: alvoLargura },
+        frameRate: TAXA_ALVO,
+      });
     } catch {
       /* a câmera fica no modo em que abriu */
     }

@@ -75,3 +75,29 @@ A alternativa seria embutir o modelo no JavaScript, dispensando a requisição.
 Foi descartada porque faria o arquivo do aplicativo crescer 148 KB para todo
 mundo, inclusive quem só vai usar o modo dedo, e porque modelo versionado à
 parte é mais fácil de trocar.
+
+## Em aberto: o Meet entrega imagem mais clara que nós
+
+Observado em 05/10/2026, com a mesma câmera e a mesma sala: a imagem no Google
+Meet fica visivelmente mais clara que a nossa, e a nossa relata 47 de 255 de
+luminância na pele.
+
+Isso é evidência de que **a câmera consegue entregar mais luz do que estamos
+obtendo**, e que o gargalo é a nossa aquisição e não o ambiente. A hipótese
+principal é o travamento da exposição: travamos para a exposição automática não
+brigar com a medição, e o Meet não trava, ficando com uma imagem melhor.
+
+A tensão é real e está documentada na literatura dos dois lados. A deriva da
+exposição automática é apontada como o maior problema de qualidade de sinal em
+condição interna típica; e maior tempo de exposição é apontado como o que mais
+melhora a correlação com o fotopletismógrafo de contato em pouca luz. Travar
+escuro perde das duas formas.
+
+O que falta medir, e que decide a questão: comparar a relação sinal-ruído final
+**com exposição travada** e **com exposição automática**, na mesma sala, com o
+mesmo participante. Se o automático ganhar, a rectificação por fundo já cobre a
+deriva e o travamento deixa de se justificar.
+
+Enquanto isso não é medido, o travamento continua, porque é o que a literatura
+recomenda e o que a medição anterior deste projeto sustentou: a correção por
+fundo levou os acertos de 1 em 16 para 16 em 16 sob balanço de branco oscilando.
