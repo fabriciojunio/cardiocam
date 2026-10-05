@@ -236,26 +236,27 @@
       sistema mede regiões inteiras da testa e das bochechas, e não pontos.
     </p>
 
-    <h2>O rosto é acompanhado, e você pode se mover</h2>
+    <h2>O rosto é encontrado sozinho, e você pode se mover</h2>
     <p>
-      Um detector de rosto roda dentro da página e as três regiões medidas
-      ficam ancoradas na posição dos seus olhos. Elas aparecem desenhadas sobre
-      a imagem: se as caixas estão lá, a medição está acontecendo onde deveria.
-      Movimento normal de quem está numa conversa não interrompe mais a leitura.
+      Um detector de rosto roda dentro da página, e as três regiões medidas
+      acompanham a caixa dele. Não há contorno para encaixar nem linha para
+      alinhar: isso existia quando a medição era num ponto fixo da tela, e
+      pedir alinhamento hoje seria pedir que você fizesse um trabalho que o
+      sistema já faz.
     </p>
     <p>
-      <strong>A distância entre os olhos é a régua.</strong> Isso é o que faz as
-      regiões crescerem quando você se aproxima e acompanharem quando você vira
-      a cabeça, em vez de medirem um ponto fixo da tela. Olhos e boca ficam
-      deliberadamente de fora: piscar e falar produzem variação de intensidade
-      muito maior que a do pulso, e numa frequência que cai dentro da banda
-      cardíaca, onde nenhuma filtragem separa.
+      O detector é uma cascata de Haar, o mesmo algoritmo da versão em Python
+      deste projeto, portado para o navegador. Ele procura <strong>estrutura</strong>:
+      o padrão de contraste de um rosto, com a faixa dos olhos escura sobre as
+      maçãs do rosto claras. A tentativa anterior procurava <strong>cor de
+      pele</strong>, e falhou num quarto comum pelo motivo mais simples
+      possível: parede bege também é cor de pele, e era maior que o rosto.
     </p>
     <p>
-      <strong>Se o detector não carregar</strong>, por rede bloqueada ou
-      navegador antigo, aparece o contorno oval e vale a regra antiga: encaixe o
-      rosto nele e alinhe os olhos na linha. A medição continua funcionando, só
-      exige que você fique mais parado.
+      Olhos e boca ficam deliberadamente fora das regiões medidas: piscar e
+      falar produzem variação de intensidade muito maior que a do pulso, e numa
+      frequência que cai dentro da banda cardíaca, onde nenhuma filtragem
+      separa.
     </p>
     <p class="fraco">
       O que o movimento ainda atrapalha é a iluminação: virar a cabeça muda o
@@ -326,9 +327,11 @@
 
     <h2>Como obter uma boa leitura</h2>
     <ul class="lista">
-      <li>Luz vinda <strong>da frente</strong>, nunca de trás. Contra a janela o sinal desaparece.</li>
-      <li>Fique o mais parado possível e evite falar durante a medição.</li>
-      <li>Rosto ocupando boa parte do contorno, a cerca de meio metro da câmera.</li>
+      <li><strong>Luz de frente, e bastante.</strong> É de longe o que mais importa, e dá para conferir pelo número: se a página disser que a pele está medindo menos de 60 de 255 de luminância, o pulso vale menos que um nível inteiro de intensidade e a câmera não consegue representá-lo. Contra a janela o sinal desaparece.</li>
+      <li><strong>Use a câmera de verdade, não a virtual.</strong> Programa de câmera virtual aplica enquadramento automático, suavização de pele e correção de cor, que são exatamente as operações que apagam o pulso. A lista de câmeras marca quais são virtuais.</li>
+      <li><strong>Rosto ocupando pelo menos um quarto da altura da imagem</strong>, a cerca de meio metro da câmera. Mais longe que isso não há pixels suficientes para a média espacial funcionar.</li>
+      <li>Movimento normal de conversa não atrapalha mais. O que atrapalha é a luz mudar: virar muito a cabeça muda o ângulo entre a pele e a luz, e isso muda a cor por um motivo que não é o pulso.</li>
+      <li>Evite falar durante a medição. A boca fica fora das regiões, mas falar move o rosto inteiro.</li>
       <li>Olhe a confiança. Abaixo de 2&nbsp;dB o número é chute e está sinalizado.</li>
       <li>Para comparar com relógio ou oxímetro, meça <strong>ao mesmo tempo</strong>. Diferença de 3 a 5&nbsp;bpm entre aparelhos é normal.</li>
     </ul>
@@ -348,13 +351,12 @@
       apagar remove tudo.
     </p>
     <p>
-      <strong>Uma ressalva, porque mudou.</strong> O detector de rosto é um
-      arquivo de modelo baixado de uma rede de distribuição na primeira
-      medição. Isso é uma requisição de rede, e antes não havia nenhuma. O que
-      não mudou é o que importa: a inferência roda aqui dentro, e nenhum quadro
-      e nenhuma medição saem do aparelho em momento algum. Quem preferir zero
-      requisição pode bloquear o domínio do modelo, e a página volta ao
-      contorno oval sem perder a medição.
+      <strong>Uma ressalva, porque mudou.</strong> O detector de rosto carrega
+      um arquivo de modelo de 148&nbsp;KB na primeira medição. É uma requisição
+      de rede, e antes não havia nenhuma, mas ela é <strong>para este mesmo
+      site</strong>: o modelo é hospedado aqui justamente para não depender de
+      terceiro. A política de segurança da página continua recusando conexão
+      para qualquer outra origem, então o vídeo não tem para onde ir.
     </p>
     <p>
       Medir a frequência cardíaca de outra pessoa é tratamento de dado pessoal
