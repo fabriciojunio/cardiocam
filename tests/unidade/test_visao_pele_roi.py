@@ -8,6 +8,7 @@ import pytest
 
 from cardiocam.visao.geometria import Retangulo
 from cardiocam.visao.pele import (
+    Y_MINIMO_LOCALIZACAO,
     descartar_extremos,
     mascara_pele,
     proporcao_de_pele,
@@ -68,6 +69,69 @@ def test_pixel_escuro_demais_e_descartado(cor: tuple[int, int, int]) -> None:
     """Em sombra fechada a informação de cor deixa de ser confiável."""
     escuro = tuple(int(c * 0.08) for c in cor)
     assert float(np.mean(mascara_pele(bloco(escuro)))) < 0.5
+
+
+# Pele real sob luz fraca de ambiente interno, em BGR.
+#
+# Não são valores inventados: saíram da medição de um rosto real numa captura em
+# que o sistema falhava, em 05/10/2026. Com o piso de crominância em 133, apenas
+# 9,8% dos pixels desse rosto passavam na classificação. A combinação que
+# caracteriza o caso é luminância baixa junto de crominância logo abaixo do
+# corte clássico, que é justamente o que uma faixa derivada de imagens bem
+# iluminadas deixa de fora.
+PELE_COM_POUCA_LUZ = (
+    (44, 46, 51),
+    (22, 27, 35),
+    (24, 26, 34),
+    (42, 48, 60),
+)
+
+# Cores da mesma cena que precisam continuar sendo recusadas, senão a caixa do
+# rosto escorrega para a camiseta ou para a parede.
+NAO_PELE_NA_MESMA_CENA = (
+    (12, 12, 12),
+    (179, 177, 174),
+    (10, 9, 8),
+    (130, 110, 95),
+)
+
+
+@pytest.mark.parametrize("cor", PELE_COM_POUCA_LUZ)
+def test_localizacao_reconhece_pele_sob_pouca_luz(cor: tuple[int, int, int]) -> None:
+    """Para localizar o rosto, perder a parte escura desloca a caixa inteira.
+
+    O piso de luminância da localização é mais baixo que o da medição de
+    propósito: aqui interessa a extensão da mancha de pele, e não a qualidade do
+    sinal de cada pixel.
+    """
+    proporcao = float(
+        np.mean(mascara_pele(bloco(cor), y_minimo=Y_MINIMO_LOCALIZACAO))
+    )
+    assert proporcao > 0.9, f"tom {cor} reconhecido em apenas {proporcao:.1%}"
+
+
+@pytest.mark.parametrize("cor", NAO_PELE_NA_MESMA_CENA)
+def test_localizacao_recusa_o_que_nao_e_pele_na_mesma_cena(
+    cor: tuple[int, int, int],
+) -> None:
+    """O alargamento não pode virar aceitar qualquer coisa escura."""
+    assert float(
+        np.mean(mascara_pele(bloco(cor), y_minimo=Y_MINIMO_LOCALIZACAO))
+    ) < 0.5
+
+
+def test_medicao_recusa_pele_escura_demais_para_ter_sinal() -> None:
+    """Abaixo de 40 de luminância o pulso some no passo de quantização.
+
+    A variação do pulso é de 0,1% a 1% da intensidade. Em luminância 29 ela vale
+    entre 0,03 e 0,3 nível, e o sensor entrega inteiros. Esses pixels na média
+    só somam ruído, e por isso a medição usa um piso mais alto que a
+    localização. O caminho certo nesse caso é avisar sobre a luz, não medir
+    assim mesmo.
+    """
+    assert float(np.mean(mascara_pele(bloco((22, 27, 35))))) < 0.5
+    # E a mesma pele com um pouco mais de luz já serve para medir.
+    assert float(np.mean(mascara_pele(bloco((44, 46, 51))))) > 0.9
 
 
 def test_imagem_vazia_devolve_mascara_vazia() -> None:

@@ -9,21 +9,48 @@
  * correção e não detalhe de implementação.
  */
 
-// Faixa clássica de crominância da pele (Chai e Ngan, 1999).
-const CR_MINIMO = 133;
+// Faixa de crominância da pele, partindo da clássica (Chai e Ngan, 1999) e
+// alargada por medição em 05/10/2026. Os valores são os mesmos da versão em
+// Python, em visao/pele.py, e precisam continuar sendo: as duas implementações
+// medem a mesma coisa, e divergir aqui tornaria os números incomparáveis.
+//
+// O piso de Cr era 133, o valor do artigo. Medido num rosto real de tom médio
+// sob luz fraca de ambiente interno, a mediana de Cr ficou em 130, três
+// unidades abaixo do corte, e só 9,8% dos pixels do rosto passavam.
+//
+// Não é defeito de um caso: a faixa clássica veio de imagens bem iluminadas e
+// de amostra pouco diversa, e é o tipo de limiar que funciona melhor para pele
+// clara e bem iluminada. Baixar para 128 levou o acerto de 9,8% para 45,2%,
+// mantendo 94,8% de rejeição do fundo e sem perder nenhum dos oito tons de
+// referência nem aceitar nenhuma das seis cores que a suíte recusa.
+const CR_MINIMO = 128;
 const CR_MAXIMO = 173;
 const CB_MINIMO = 77;
 const CB_MAXIMO = 127;
 
-// Descarta pixels queimados ou totalmente escuros, onde a informação de cor
-// perde o sentido.
+// Piso de luminância, que depende do uso. São dois, e separá-los é o ponto.
+//
+// **Para medir**, 40. Abaixo disso o pixel não carrega sinal aproveitável: o
+// pulso é 0,1% a 1% da intensidade, então em luminância 20 vale entre 0,02 e
+// 0,2 nível, e o sensor quantiza em inteiros. Incluir na média só soma ruído.
+//
+// **Para localizar o rosto**, 10. Ali interessa a extensão da mancha e não a
+// qualidade de cada pixel. Medido num rosto real sob luz fraca, a mediana de
+// luminância ficou em 20 e a testa em 10: o corte em 40 descartava três quartos
+// do rosto antes de olhar a cor, e o localizador não achava rosto nenhum.
 const Y_MINIMO = 40;
+export const Y_MINIMO_LOCALIZACAO = 10;
 const Y_MAXIMO = 250;
 
-/** Decide se um pixel RGB é pele. */
-export function classificarPele(r, g, b) {
+/**
+ * Decide se um pixel RGB é pele.
+ *
+ * `yMinimo` tem como padrão o piso da medição, que é o mais exigente. O
+ * localizador de rosto passa `Y_MINIMO_LOCALIZACAO`.
+ */
+export function classificarPele(r, g, b, yMinimo = Y_MINIMO) {
   const y = 0.299 * r + 0.587 * g + 0.114 * b;
-  if (y < Y_MINIMO || y > Y_MAXIMO) return false;
+  if (y < yMinimo || y > Y_MAXIMO) return false;
   const cr = (r - y) * 0.713 + 128;
   const cb = (b - y) * 0.564 + 128;
   return cr >= CR_MINIMO && cr <= CR_MAXIMO && cb >= CB_MINIMO && cb <= CB_MAXIMO;

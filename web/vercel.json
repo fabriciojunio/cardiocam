@@ -1,5 +1,16 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "//": [
+    "connect-src era 'none', que era a garantia mais forte do projeto: nada",
+    "podia sair daqui, nem por engano. Passou para 'self' quando o detector de",
+    "rosto em cascata entrou, porque ele precisa buscar o modelo de 148 KB do",
+    "proprio site.",
+    "",
+    "A diferenca e menor do que parece, e vale registrar: 'self' permite",
+    "requisicao para esta origem e para nenhuma outra. Terceiro continua",
+    "bloqueado, e e por isso que o modelo e hospedado aqui em vez de vir de uma",
+    "rede de distribuicao. O video continua sem ter para onde ir."
+  ],
   "headers": [
     {
       "source": "/(.*)",
@@ -13,7 +24,7 @@
         },
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; script-src 'self'; style-src 'self'; connect-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+          "value": "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
         }
       ]
     }

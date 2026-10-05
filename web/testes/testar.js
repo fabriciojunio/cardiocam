@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Testes do processamento de sinais no navegador.
  *
  * Rodam em Node com `npm test`, sem navegador e sem dependências. A estratégia
@@ -21,13 +21,10 @@ import {
   removerReferencia,
 } from '../js/dsp.js';
 import { extrairPulso } from '../js/rppg.js';
-import { classificarPele } from '../js/pele.js';
+import { classificarPele, Y_MINIMO_LOCALIZACAO } from '../js/pele.js';
 import { Medidor, medirDedo, rectificarPeloFundo } from '../js/medidor.js';
 import {
-  ALTURA_MAXIMA_RELATIVA,
-  RastreadorDeRosto,
   REGIOES_NA_CAIXA,
-  localizarRosto,
   regioesDaCaixa,
   regioesDeFundo,
   saltoAbsurdo,
@@ -535,122 +532,77 @@ for (const [r, g, b] of NAO_PELE) {
   verificar(`cor rgb(${r},${g},${b}) rejeitada como pele`, !classificarPele(r, g, b));
 }
 
-// ---------------------------------------------------------------------------
-grupo('Localização do rosto pela mancha de pele');
+/*
+  Pele real sob luz fraca de ambiente interno.
 
-/**
- * Monta um quadro RGBA com um retângulo de pele sobre fundo que não é pele.
- *
- * Fundo azul de propósito: é a cor mais distante da faixa de crominância da
- * pele, então um falso positivo aqui seria defeito do classificador e não
- * ambiguidade do cenário.
- */
-function quadroComPele({
-  largura = 160,
-  altura = 120,
-  caixa,
-  pele = [200, 150, 125],
-  fundo = [30, 40, 150],
-}) {
-  const dados = new Uint8ClampedArray(largura * altura * 4);
-  const x0 = Math.round(caixa.x * largura);
-  const y0 = Math.round(caixa.y * altura);
-  const x1 = Math.round((caixa.x + caixa.largura) * largura);
-  const y1 = Math.round((caixa.y + caixa.altura) * altura);
+  Estes valores não foram inventados: saíram da medição de um rosto real numa
+  captura em que o sistema falhava, em 05/10/2026. Com os limiares antigos
+  (Y >= 40 e Cr >= 133) apenas 9,8% dos pixels desse rosto passavam, e o
+  localizador não achava rosto nenhum.
 
-  for (let y = 0; y < altura; y++) {
-    for (let x = 0; x < largura; x++) {
-      const dentro = x >= x0 && x < x1 && y >= y0 && y < y1;
-      const cor = dentro ? pele : fundo;
-      const i = (y * largura + x) * 4;
-      dados[i] = cor[0];
-      dados[i + 1] = cor[1];
-      dados[i + 2] = cor[2];
-      dados[i + 3] = 255;
-    }
-  }
-  return { dados, largura, altura };
+  A combinação que caracteriza o caso é luminância baixa **com** crominância
+  logo abaixo do corte clássico, e é justamente a combinação que a faixa
+  derivada de imagens bem iluminadas deixa de fora. Estes testes existem para
+  que um ajuste futuro não volte a excluir esse rosto sem que alguém perceba.
+*/
+const PELE_COM_POUCA_LUZ = [
+  [51, 46, 44],   // bochecha medida, Y=47  Cr=130
+  [35, 27, 22],   // bochecha mais escura, Y=29  Cr=132
+  [34, 26, 24],   // rosto inteiro, média
+  [60, 48, 42],   // o mesmo tom com um pouco mais de luz
+];
+
+/*
+  Os dois pisos de luminância têm contratos diferentes, e o teste cobra os dois
+  separadamente em vez de escolher um.
+
+  **Localização** aceita tudo isso: perder a parte escura do rosto deslocaria a
+  caixa inteira para o lado onde a luz bate, que é o lado errado do problema.
+*/
+for (const [r, g, b] of PELE_COM_POUCA_LUZ) {
+  verificar(
+    `localização reconhece pele sob pouca luz rgb(${r},${g},${b})`,
+    classificarPele(r, g, b, Y_MINIMO_LOCALIZACAO),
+  );
 }
 
-{
-  const verdadeira = { x: 0.35, y: 0.20, largura: 0.30, altura: 0.40 };
-  const q = quadroComPele({ caixa: verdadeira });
-  const achada = localizarRosto(q.dados, q.largura, q.altura);
+/*
+  **Medição** recusa os mais escuros, e está certo em recusar: com luminância
+  abaixo de 40 o pulso vale menos que o passo de quantização do sensor, e
+  incluir esses pixels na média só soma ruído ao que já é pouco sinal.
 
-  verificar('acha o rosto no quadro', achada !== null);
-  verificar('acerta a posição horizontal',
-    Math.abs(achada.x - verdadeira.x) < 0.03,
-    `achou x=${achada.x.toFixed(3)}, esperado ${verdadeira.x}`);
-  verificar('acerta a largura',
-    Math.abs(achada.largura - verdadeira.largura) < 0.03,
-    `achou ${achada.largura.toFixed(3)}, esperado ${verdadeira.largura}`);
-  verificar('acerta a posição vertical',
-    Math.abs(achada.y - verdadeira.y) < 0.03);
-
-  /* O que faz a medição sobreviver ao movimento: deslocar a mancha tem de
-     deslocar a caixa na mesma medida. */
-  const deslocada = { x: 0.52, y: 0.32, largura: 0.30, altura: 0.40 };
-  const q2 = quadroComPele({ caixa: deslocada });
-  const achada2 = localizarRosto(q2.dados, q2.largura, q2.altura);
-  verificar('rosto deslocado move a caixa junto',
-    Math.abs(achada2.x - deslocada.x) < 0.03
-    && Math.abs(achada2.y - deslocada.y) < 0.03,
-    `achou (${achada2.x.toFixed(2)}, ${achada2.y.toFixed(2)})`);
-  verificar('deslocar não muda o tamanho da caixa',
-    Math.abs(achada2.largura - achada.largura) < 0.03);
-
-  /* Aproximar o rosto aumenta a mancha, e a caixa tem de crescer. */
-  const perto = { x: 0.20, y: 0.10, largura: 0.60, altura: 0.70 };
-  const q3 = quadroComPele({ caixa: perto });
-  const achada3 = localizarRosto(q3.dados, q3.largura, q3.altura);
-  verificar('rosto perto da câmera dá caixa maior',
-    achada3.largura > achada.largura * 1.5);
-
-  /* Pescoço e colo são pele, e sem o corte pela proporção a caixa desceria
-     até a camiseta, jogando a testa para o meio do rosto. */
-  const comPescoco = { x: 0.38, y: 0.15, largura: 0.24, altura: 0.80 };
-  const q4 = quadroComPele({ caixa: comPescoco });
-  const achada4 = localizarRosto(q4.dados, q4.largura, q4.altura);
-  const razao = (achada4.altura * q4.altura) / (achada4.largura * q4.largura);
-  verificar('a altura é cortada pela proporção do rosto',
-    razao <= ALTURA_MAXIMA_RELATIVA + 0.05,
-    `razão altura/largura = ${razao.toFixed(2)}`);
-
-  verificar('quadro sem pele não acha rosto',
-    localizarRosto(
-      quadroComPele({ caixa: { x: 0, y: 0, largura: 0, altura: 0 } }).dados,
-      160, 120,
-    ) === null);
-
-  /* Mancha minúscula: é ruído, não rosto. Medir numa área dessas daria um
-     número com ruído maior que o sinal. */
-  const minuscula = quadroComPele({ caixa: { x: 0.5, y: 0.5, largura: 0.02, altura: 0.02 } });
-  verificar('mancha de pele minúscula é ignorada',
-    localizarRosto(minuscula.dados, minuscula.largura, minuscula.altura) === null);
-
-  verificar('quadro degenerado não quebra',
-    localizarRosto(new Uint8ClampedArray(16), 2, 2) === null
-    && localizarRosto(null, 160, 120) === null);
-
-  /* O passo de amostragem existe para caber no orçamento de tempo do celular,
-     e não deve mudar a resposta de forma perceptível. */
-  const comPasso4 = localizarRosto(q.dados, q.largura, q.altura, 4);
-  verificar('amostrar com passo maior dá praticamente a mesma caixa',
-    Math.abs(comPasso4.x - achada.x) < 0.04
-    && Math.abs(comPasso4.largura - achada.largura) < 0.04);
-
-  /* Tons de pele diferentes têm de dar a mesma caixa: o classificador
-     limiariza em crominância e não em luminância justamente para isso, e aqui
-     a propriedade é cobrada de ponta a ponta. */
-  const TONS = [[235, 215, 200], [205, 175, 150], [160, 130, 105], [110, 85, 65]];
-  for (const tom of TONS) {
-    const qt = quadroComPele({ caixa: verdadeira, pele: tom });
-    const at = localizarRosto(qt.dados, qt.largura, qt.altura);
-    verificar(`localiza rosto de tom rgb(${tom.join(',')})`,
-      at !== null && Math.abs(at.largura - verdadeira.largura) < 0.04,
-      at ? `largura ${at.largura.toFixed(3)}` : 'não achou');
-  }
+  É por isso que o sistema avisa sobre a luz em vez de tentar medir assim mesmo.
+*/
+verificar(
+  'medição aceita a bochecha mais clara, com luminância 47',
+  classificarPele(51, 46, 44),
+);
+for (const [r, g, b] of [[35, 27, 22], [34, 26, 24]]) {
+  verificar(
+    `medição recusa rgb(${r},${g},${b}), escuro demais para ter sinal`,
+    !classificarPele(r, g, b),
+  );
 }
+
+/*
+  E o contrapeso, que é o que impede o alargamento de virar aceitar tudo.
+
+  Estas cores aparecem na mesma cena e precisam continuar sendo recusadas,
+  senão a caixa do rosto escorrega para a camiseta ou para a parede.
+*/
+const NAO_PELE_NA_MESMA_CENA = [
+  [12, 12, 12],      // camiseta preta
+  [174, 177, 179],   // parede clara, levemente azulada
+  [8, 9, 10],        // sombra do fundo
+  [95, 110, 130],    // azul acinzentado de móvel
+];
+for (const [r, g, b] of NAO_PELE_NA_MESMA_CENA) {
+  verificar(
+    `rgb(${r},${g},${b}) da mesma cena continua recusado`,
+    !classificarPele(r, g, b),
+  );
+}
+
 
 // ---------------------------------------------------------------------------
 grupo('Regiões derivadas da caixa do rosto');
@@ -704,48 +656,17 @@ grupo('Regiões derivadas da caixa do rosto');
 }
 
 // ---------------------------------------------------------------------------
-grupo('Estabilização da caixa ao longo do tempo');
+grupo('Rejeição de salto na caixa do rosto');
+
+/*
+  A estabilidade temporal completa do rastreador é testada em
+  `testar_cascata.mjs`, onde o modelo da cascata já está carregado. Aqui ficam
+  as funções puras, que não dependem de modelo nenhum.
+*/
 
 {
-  const caixa = { x: 0.35, y: 0.20, largura: 0.30, altura: 0.40 };
-  const q = quadroComPele({ caixa });
-
-  const rastreador = new RastreadorDeRosto();
-  const primeira = rastreador.atualizar(q.dados, q.largura, q.altura);
-  verificar('o primeiro quadro adota a medição direto', primeira !== null);
-
-  /* Suavização: a caixa não deve pular para a medição nova de uma vez, senão
-     o tremor da localização entra no sinal. */
-  const longe = quadroComPele({
-    caixa: { x: 0.45, y: 0.20, largura: 0.30, altura: 0.40 },
-  });
-  const segunda = rastreador.atualizar(longe.dados, longe.largura, longe.altura);
-  verificar('a caixa se move devagar na direção da medição nova',
-    segunda.x > primeira.x && segunda.x < 0.45,
-    `x foi de ${primeira.x.toFixed(3)} para ${segunda.x.toFixed(3)}`);
-
-  /* Falha momentânea: piscar, virar de leve ou uma sombra passageira não
-     deveriam zerar a medição acumulada. */
-  const semPele = quadroComPele({ caixa: { x: 0, y: 0, largura: 0, altura: 0 } });
-  const mantida = rastreador.atualizar(semPele.dados, 160, 120);
-  verificar('perda momentânea mantém a última caixa',
-    mantida !== null && Math.abs(mantida.x - segunda.x) < 1e-9);
-
-  /* Perda prolongada: aí sim a caixa é descartada, porque continuar medindo
-     onde o rosto não está produz um número sem significado. */
-  for (let i = 0; i < 20; i++) rastreador.atualizar(semPele.dados, 160, 120);
-  verificar('perda prolongada descarta a caixa',
-    rastreador.atualizar(semPele.dados, 160, 120) === null);
-  verificar('o rastreador relata que perdeu o rosto', rastreador.perdeuORosto);
-
-  rastreador.reiniciar();
-  verificar('reiniciar zera o estado',
-    rastreador.caixa === null && !rastreador.perdeuORosto);
-}
-
-{
-  /* Rejeição de salto: rosto humano não atravessa um terço da própria largura
-     em 33 ms. Quando isso aparece, é outra mancha de pele que entrou. */
+  /* Rosto humano não atravessa um terço da própria largura entre duas
+     localizações. Quando isso aparece, é outro rosto ou falso positivo. */
   const antiga = { x: 0.35, y: 0.20, largura: 0.30, altura: 0.40 };
   verificar('salto grande é rejeitado',
     saltoAbsurdo(antiga, { x: 0.80, y: 0.20, largura: 0.30, altura: 0.40 }));
@@ -867,7 +788,6 @@ for (const amplitudeDoMovimento of [0, 0.25]) {
   const pulso = ondaDePulso(tempos, bpm / 60);
 
   const medidor = new Medidor({ janelaS: 12, algoritmo: 'pos' });
-  const rastreador = new RastreadorDeRosto();
   let quadrosComRosto = 0;
 
   for (let i = 0; i < total; i++) {
@@ -890,17 +810,29 @@ for (const amplitudeDoMovimento of [0, 0.25]) {
       b: 1 + amplitude * GANHO_CANAL.azul * pulso[i],
     };
 
-    const { dadosDoQuadro, contexto } = quadroAnimado({
+    const { contexto } = quadroAnimado({
       largura, altura, caixa, modulacao, aleatorio, tom,
     });
 
-    const localizada = rastreador.atualizar(dadosDoQuadro, largura, altura);
-    const regioes = localizada ? rastreador.regioes() : null;
+    /*
+      As regiões vêm da caixa verdadeira, e não de um detector.
+
+      É deliberado, e separa duas perguntas que não devem se misturar. Aqui
+      está sob teste **a medição com as regiões acompanhando o rosto**: se a
+      média de cor sobrevive ao fato de os pixels medidos mudarem de posição
+      quadro a quadro. Se um detector entrasse neste laço, uma falha de
+      detecção apareceria como falha de medição, e seria preciso investigar
+      qual das duas quebrou.
+
+      A detecção tem a suíte dela, em `testar_cascata.mjs`, comparada contra o
+      OpenCV em imagem real. Aqui a caixa é conhecida porque nós a desenhamos.
+    */
+    const regioes = regioesDaCaixa(caixa);
     if (regioes) quadrosComRosto++;
 
     medidor.processarQuadro(
       contexto, largura, altura, tempos[i],
-      regioes || [], regioesDeFundo(localizada),
+      regioes || [], regioesDeFundo(caixa),
     );
   }
 

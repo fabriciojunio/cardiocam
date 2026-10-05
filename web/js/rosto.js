@@ -1,77 +1,52 @@
 /**
- * Localização e rastreamento do rosto, sem baixar modelo nenhum.
+ * Rastreamento do rosto: localização estável ao longo do tempo.
  *
- * ## Por que isto passou a existir
+ * ## O caminho até aqui, porque as duas tentativas anteriores ensinaram algo
  *
- * A versão web media dentro de um oval fixo na tela e pedia que a pessoa
- * encaixasse o rosto nele. O comentário que justificava a escolha estava
- * tecnicamente correto: com o rosto ancorado num lugar fixo, a região medida
- * para de tremer entre quadros, e o tremor da caixa é o que mais estraga a
- * medição automática.
+ * A versão original media dentro de um **oval fixo** e pedia que a pessoa se
+ * encaixasse nele. Funcionava, e o comentário que justificava a escolha estava
+ * certo quanto ao tremor da caixa. O preço era a pessoa ter de ficar imóvel.
  *
- * Só que o preço aparece no primeiro uso real. A pessoa tem de ficar imóvel, a
- * câmera também, e sair do oval por meio segundo contamina a janela inteira,
- * porque a média passa a incluir parede em vez de pele. Isso é uma variação de
- * amplitude muito maior que o pulso, e na banda errada.
+ * A segunda tentativa localizou o rosto pela **mancha de pele**, reaproveitando
+ * o classificador de crominância que o projeto já tinha testado. Passou em todo
+ * cenário sintético e falhou na primeira foto real, pela razão mais simples
+ * possível: **a parede bege do quarto cai na faixa de crominância da pele e é
+ * maior que o rosto**. A maior região conexa de "pele" era a parede. Nenhum
+ * ajuste de limiar conserta isso, porque o problema não é o limiar: é a
+ * premissa de que a maior mancha cor de pele é um rosto.
  *
- * ## Por que não um modelo de rede neural
+ * A terceira, que é esta, usa o **detector em cascata de Haar**, portado para
+ * JavaScript em `cascata.js`. Ele procura estrutura, o padrão de contraste de
+ * um rosto, e não cor. Na mesma foto em que a cor falhou, acha o rosto a quatro
+ * pixels de onde o OpenCV acha.
  *
- * O caminho óbvio seria o BlazeFace, via MediaPipe. Foi medido e descartado por
- * três motivos, nesta ordem de peso:
+ * A lição que fica, e que vale além deste módulo: **cenário sintético aprova
+ * método que o mundo reprova**. O rosto sintético era uma mancha uniforme sobre
+ * fundo azul, e nessa cena a cor basta. Quarto de verdade tem parede cor de
+ * pele.
  *
- * 1. **Tamanho.** O runtime em WebAssembly tem 9,3 MB e o pacote todo passa de
- *    18 MB. Numa página que precisa funcionar em celular, isso não é detalhe:
- *    é a diferença entre abrir e não abrir.
- * 2. **Política de segurança.** O site serve com `script-src 'self'` e
- *    `connect-src 'none'`. Baixar modelo de terceiro exigiria afrouxar as duas
- *    diretivas, e elas são o que garante que nenhum dado saia daqui. Trocar
- *    uma garantia verificável por conveniência é troca ruim.
- * 3. **Testabilidade.** Modelo em WebAssembly não roda na suíte em Node, que é
- *    onde os 356 casos deste projeto moram. Um rastreador que não pode ser
- *    testado é um rastreador em que não se confia.
+ * ## O que este módulo acrescenta ao detector
  *
- * ## Como funciona então
+ * Estabilidade temporal, que o detector sozinho não tem:
  *
- * Reaproveitando o que o projeto já tem testado: o classificador de pele por
- * crominância. Ele limiariza em Cr e Cb e nunca em luminância, de propósito, o
- * que o torna estável em qualquer tom de pele. É a base certa para localizar
- * rosto sem treinar nada.
+ * - **suavização exponencial** da caixa, porque o detector redetecta do zero e
+ *   a caixa oscila alguns pixels mesmo com a pessoa imóvel. Esse tremor entra
+ *   no sinal como ruído na banda errada, e trocá-lo por um pequeno atraso é o
+ *   mal menor;
+ * - **rejeição de salto**, porque rosto humano não atravessa um terço da
+ *   própria largura entre dois quadros;
+ * - **tolerância a falha**, porque piscar, virar de leve ou uma sombra
+ *   passageira não deveriam zerar o sinal acumulado.
  *
- * O caminho é clássico e barato:
- *
- * 1. histograma de pixels de pele por coluna e por linha, sobre o quadro já
- *    reduzido que o medidor usa;
- * 2. extensão horizontal e vertical por limiar relativo ao máximo, o que
- *    descarta pixel de pele isolado sem precisar de componente conexo;
- * 3. **corte da altura pela proporção do rosto.** Pescoço e colo são pele e
- *    entrariam na caixa, puxando-a para baixo. Um rosto humano tem altura
- *    entre 1,2 e 1,6 vez a largura, então a altura é limitada a 1,45 vez;
- * 4. suavização exponencial e rejeição de salto, iguais às da versão em
- *    Python e pelos mesmos motivos.
- *
- * As regiões saem das mesmas proporções da caixa que a versão em Python usa
- * quando não tem os olhos. Isso é deliberado: as duas implementações precisam
- * medir a mesma coisa para que os números sejam comparáveis entre elas.
- *
- * ## O que este rastreador não faz
- *
- * Não distingue rosto de qualquer outra mancha de pele grande. Mão na frente da
- * câmera, braço nu atravessando o quadro ou madeira de tom próximo ao da pele
- * deslocam a caixa. A rejeição de salto cobre o caso brusco; a mão parada ao
- * lado do rosto, não. É a limitação honesta de localizar por cor em vez de por
- * forma, e é o preço de não baixar 9 MB.
- *
- * Também não estima pose. Virar a cabeça muda o ângulo entre a pele e a luz, e
- * isso muda a cor refletida por um motivo que não é o pulso. Acompanhar o rosto
- * resolve medir o lugar certo, não a luz mudando.
+ * São as mesmas três coisas, com os mesmos valores, da versão em Python.
  */
 
-import { classificarPele } from './pele.js';
+import { detectar, paraCinza } from './cascata.js';
 
 /**
  * Proporções das regiões dentro da caixa do rosto.
  *
- * Iguais às da versão em Python e às que a versão web já usava dentro do oval
+ * Iguais às da versão em Python e às que a versão web usava dentro do oval
  * fixo. Mudar aqui sem mudar lá quebraria a comparabilidade entre as duas, que
  * é o que permite usar uma para validar a outra.
  *
@@ -85,114 +60,14 @@ export const REGIOES_NA_CAIXA = Object.freeze([
   Object.freeze({ x: 0.62, y: 0.50, largura: 0.30, altura: 0.30 }),
 ]);
 
-/**
- * Altura máxima da caixa, em múltiplos da largura.
- *
- * Existe por causa do pescoço. Pescoço e colo são pele pela crominância, e sem
- * este corte a caixa desce até a camiseta, jogando a região da testa para o
- * meio do rosto e as bochechas para a mandíbula.
- *
- * O valor vem da proporção do rosto humano, que fica entre 1,2 e 1,6 vez a
- * largura. 1,45 deixa folga para cabelo na testa sem alcançar o pescoço.
- */
-export const ALTURA_MAXIMA_RELATIVA = 1.45;
-
-/** Fração do máximo do histograma que conta como "tem pele nesta faixa". */
-const LIMIAR_DO_HISTOGRAMA = 0.28;
-
-/** Pixels de pele mínimos para considerar que há rosto no quadro. */
-const PIXELS_MINIMOS = 180;
-
-/** Peso da medição nova na média exponencial da caixa. */
+/** Peso da detecção nova na média exponencial da caixa. */
 const SUAVIZACAO = 0.25;
 
-/** Salto aceito entre quadros, em fração da largura do rosto. */
+/** Salto aceito entre detecções, em fração da largura do rosto. */
 const SALTO_MAXIMO = 0.35;
 
-/** Quadros seguidos em que a última caixa continua valendo sem detecção. */
-const TOLERANCIA_QUADROS = 15;
-
-/**
- * Extensão de um histograma, pelo limiar relativo ao máximo.
- *
- * Devolve o primeiro e o último índice acima do limiar. Usar limiar relativo e
- * não absoluto é o que faz isto funcionar igual com rosto perto e longe da
- * câmera, e com pouca ou muita luz.
- */
-function extensao(histograma, limiarRelativo) {
-  let maximo = 0;
-  for (const valor of histograma) if (valor > maximo) maximo = valor;
-  if (maximo === 0) return null;
-
-  const limiar = maximo * limiarRelativo;
-  let inicio = -1;
-  let fim = -1;
-  for (let i = 0; i < histograma.length; i++) {
-    if (histograma[i] >= limiar) {
-      if (inicio < 0) inicio = i;
-      fim = i;
-    }
-  }
-  return inicio < 0 ? null : { inicio, fim };
-}
-
-/**
- * Localiza o rosto num quadro, pela mancha de pele.
- *
- * `dados` é o array RGBA de `getImageData`. `passo` amostra um pixel a cada N
- * em cada eixo: com passo 2 o custo cai a um quarto e a caixa resultante muda
- * menos de um pixel, porque o que se mede aqui é a extensão de uma mancha
- * grande e não a posição de uma borda fina.
- *
- * @returns {{x,y,largura,altura}|null} caixa em frações do quadro
- */
-export function localizarRosto(dados, largura, altura, passo = 2) {
-  if (!dados || largura < 8 || altura < 8) return null;
-
-  const porColuna = new Float32Array(largura);
-  const porLinha = new Float32Array(altura);
-  let total = 0;
-
-  for (let y = 0; y < altura; y += passo) {
-    const base = y * largura;
-    for (let x = 0; x < largura; x += passo) {
-      const i = (base + x) * 4;
-      if (!classificarPele(dados[i], dados[i + 1], dados[i + 2])) continue;
-      porColuna[x] += 1;
-      porLinha[y] += 1;
-      total += 1;
-    }
-  }
-
-  // Normaliza pelo número de amostras, para o limiar não depender do passo.
-  if (total * passo * passo < PIXELS_MINIMOS) return null;
-
-  const colunas = extensao(porColuna, LIMIAR_DO_HISTOGRAMA);
-  const linhas = extensao(porLinha, LIMIAR_DO_HISTOGRAMA);
-  if (!colunas || !linhas) return null;
-
-  const x = colunas.inicio / largura;
-  const larguraCaixa = (colunas.fim - colunas.inicio + 1) / largura;
-  const y = linhas.inicio / altura;
-  let alturaCaixa = (linhas.fim - linhas.inicio + 1) / altura;
-
-  if (larguraCaixa <= 0 || alturaCaixa <= 0) return null;
-
-  // Corte pela proporção do rosto, medido em pixels e não em frações, porque
-  // o quadro não é quadrado e comparar frações compararia coisas diferentes.
-  const larguraEmPixels = larguraCaixa * largura;
-  const alturaMaximaEmPixels = larguraEmPixels * ALTURA_MAXIMA_RELATIVA;
-  if (alturaCaixa * altura > alturaMaximaEmPixels) {
-    alturaCaixa = alturaMaximaEmPixels / altura;
-  }
-
-  return {
-    x,
-    y,
-    largura: larguraCaixa,
-    altura: Math.min(alturaCaixa, 1 - y),
-  };
-}
+/** Execuções seguidas em que a última caixa continua valendo sem detecção. */
+const TOLERANCIA = 6;
 
 /** Regiões de interesse dentro da caixa do rosto, em frações do quadro. */
 export function regioesDaCaixa(caixa) {
@@ -230,9 +105,9 @@ function interpolar(antiga, nova, peso) {
 /**
  * Decide se a caixa nova é salto absurdo em relação à anterior.
  *
- * Rosto humano não atravessa um terço da própria largura em 33 ms, e não dobra
- * de tamanho entre dois quadros. Quando isso aparece, é mancha de pele que
- * entrou no quadro, não a pessoa se movendo.
+ * Rosto humano não atravessa um terço da própria largura entre duas
+ * localizações, e não dobra de tamanho. Quando isso aparece, é outro rosto que
+ * entrou no quadro ou um falso positivo.
  */
 export function saltoAbsurdo(antiga, nova) {
   if (!antiga) return false;
@@ -245,14 +120,14 @@ export function saltoAbsurdo(antiga, nova) {
 }
 
 /**
- * Mantém a caixa estável ao longo do tempo.
+ * Mantém a caixa do rosto estável ao longo do tempo.
  *
- * Suavizar troca o tremor da localização por um atraso, e o atraso é o mal
- * menor: tremor entra no sinal como ruído na banda errada, e atraso só desloca
- * a região alguns pixels, o que a folga das proporções absorve.
+ * O modelo da cascata é passado no construtor em vez de carregado aqui, para
+ * este módulo não depender de rede e continuar testável em Node.
  */
 export class RastreadorDeRosto {
-  constructor({ suavizacao = SUAVIZACAO, tolerancia = TOLERANCIA_QUADROS } = {}) {
+  constructor(modelo, { suavizacao = SUAVIZACAO, tolerancia = TOLERANCIA } = {}) {
+    this.modelo = modelo;
     this.suavizacao = suavizacao;
     this.tolerancia = tolerancia;
     this.reiniciar();
@@ -260,55 +135,73 @@ export class RastreadorDeRosto {
 
   reiniciar() {
     this.caixa = null;
-    this.quadrosSemRosto = 0;
+    this.semRosto = 0;
     this.saltosRejeitados = 0;
+    this.ultimaDeteccao = null;
   }
 
   get perdeuORosto() {
-    return this.quadrosSemRosto > this.tolerancia;
+    return this.semRosto > this.tolerancia;
   }
 
-  /** Processa um quadro e devolve a caixa estabilizada, ou null. */
-  atualizar(dados, largura, altura, passo = 2) {
-    const medida = localizarRosto(dados, largura, altura, passo);
+  /**
+   * Localiza o rosto num quadro RGBA e devolve a caixa estabilizada.
+   *
+   * @param {Uint8ClampedArray} rgba pixels do quadro
+   * @returns {{x,y,largura,altura}|null} em frações do quadro
+   */
+  atualizar(rgba, largura, altura) {
+    if (!this.modelo || !rgba) return null;
 
-    if (!medida) {
-      this.quadrosSemRosto += 1;
+    const cinza = paraCinza(rgba, largura, altura);
+    const achados = detectar(this.modelo, cinza, largura, altura);
+
+    if (achados.length === 0) {
+      this.semRosto += 1;
       if (this.caixa && !this.perdeuORosto) return this.caixa;
       this.caixa = null;
       return null;
     }
 
+    // O maior rosto do quadro: quem está sendo medido é quem está mais perto
+    // da câmera, e rosto ao fundo é distração.
+    const melhor = achados[0];
+    const medida = {
+      x: melhor.x / largura,
+      y: melhor.y / altura,
+      largura: melhor.largura / largura,
+      altura: melhor.altura / altura,
+    };
+    this.ultimaDeteccao = { ...medida, vizinhos: melhor.n };
+
     if (this.caixa && saltoAbsurdo(this.caixa, medida)) {
       this.saltosRejeitados += 1;
-      this.quadrosSemRosto += 1;
+      this.semRosto += 1;
       if (!this.perdeuORosto) return this.caixa;
     }
 
-    this.quadrosSemRosto = 0;
+    this.semRosto = 0;
     this.caixa = this.caixa
       ? interpolar(this.caixa, medida, this.suavizacao)
       : medida;
     return this.caixa;
   }
 
-  /** Regiões de interesse do quadro atual. */
+  /** Regiões de interesse do estado atual. */
   regioes() {
     return regioesDaCaixa(this.caixa);
   }
 }
 
 /**
- * Faixas de fundo que não encostam no rosto rastreado.
+ * Faixas de fundo que não encostam no rosto.
  *
- * Com o oval fixo, o fundo eram duas faixas laterais fixas, e isso funcionava
- * porque o rosto estava sempre no meio. Com o rosto se movendo, uma faixa fixa
- * pode acabar em cima dele, e aí a referência de iluminação passa a conter
- * pulso, que é o oposto do que ela serve para fazer.
+ * O fundo serve de referência de iluminação, e só vale se não tiver pulso. Com
+ * o rosto se movendo, uma faixa fixa pode acabar em cima dele, e aí a correção
+ * passa a injetar o sinal que deveria remover.
  *
- * Devolver lista vazia é resposta legítima: sem fundo utilizável, o medidor
- * mede sem rectificação, o que é melhor que rectificar por uma referência que
- * é pele.
+ * Devolver lista vazia é resposta legítima: sem fundo utilizável o medidor mede
+ * sem rectificação, o que é melhor que rectificar por uma referência que é pele.
  */
 export function regioesDeFundo(caixaRosto) {
   const LARGURA = 0.13;

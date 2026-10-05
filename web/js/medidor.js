@@ -207,6 +207,30 @@ export class Medidor {
     return this.amostras[this.amostras.length - 1].t - this.amostras[0].t;
   }
 
+  /**
+   * Luminância média da pele medida, de 0 a 255.
+   *
+   * Serve para a interface avisar quando a imagem está escura demais para a
+   * medição ter chance. Não é estética: a variação que carrega o pulso é de
+   * 0,1% a 1% da intensidade, então numa região com luminância 20 o pulso vale
+   * entre 0,02 e 0,2 níveis, e o sensor quantiza em números inteiros. O sinal
+   * fica abaixo do passo de quantização, e só sobrevive porque a média
+   * espacial sobre milhares de pixels recupera parte dele. Dobrar a
+   * luminância dobra o sinal antes de qualquer processamento, e é a
+   * providência mais eficaz que existe do lado de quem mede.
+   *
+   * Usa os coeficientes de luminância da recomendação BT.601, que são os
+   * mesmos usados na conversão para YCrCb da segmentação de pele.
+   */
+  get luminanciaMedia() {
+    if (this.amostras.length === 0) return NaN;
+    let soma = 0;
+    for (const a of this.amostras) {
+      soma += 0.299 * a.r + 0.587 * a.g + 0.114 * a.b;
+    }
+    return soma / this.amostras.length;
+  }
+
   get progresso() {
     return Math.min(1, this.duracaoAcumulada / this.janelaS);
   }

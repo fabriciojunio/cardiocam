@@ -31,6 +31,20 @@
 
 * { box-sizing: border-box; }
 
+/*
+  O atributo `hidden` precisa ganhar das classes.
+
+  A folha de estilo do navegador aplica `display: none` ao atributo `hidden`,
+  mas qualquer regra de autor com seletor de classe tem precedência maior. Como
+  `.palco-vazio`, `.palco-leitura`, `.campo` e `.aviso-consentimento` definem
+  `display`, o atributo não surtia efeito em nenhum deles.
+
+  O sintoma era visível e confundia: o aviso "a câmera ainda não foi iniciada"
+  continuava aparecendo **por cima do vídeo** durante a medição, porque o
+  JavaScript marcava `hidden = true` e o CSS mandava mostrar assim mesmo.
+*/
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   padding: 0;
