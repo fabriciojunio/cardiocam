@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Amarra a interface ao medidor.
  *
  * Nenhuma lógica de sinal mora aqui: este arquivo só liga botões, desenha os
@@ -31,7 +31,6 @@ const el = {
   canvas: $('canvasOculto'),
   palco: $('palco'),
   palcoVazio: $('palcoVazio'),
-  guia: $('guia'),
   barra: $('barraProgresso').querySelector('i'),
   estado: $('estado'),
   bpm: $('bpm'),
@@ -50,7 +49,6 @@ const el = {
   btnDedo: $('btnFonteDedo'),
   btnArquivo: $('btnFonteArquivo'),
   resolucao: $('dadoResolucao'),
-  regioes: $('canvasRegioes'),
   avisoConsentimento: $('avisoConsentimento'),
   chkConsentimento: $('chkConsentimento'),
   ressalvaCompressao: $('ressalvaCompressao'),
@@ -691,10 +689,69 @@ async function iniciarCamera() {
   }
 
   const trilha = fluxo.getVideoTracks()[0];
+  await subirResolucaoSePuder(trilha);
   const ajustes = trilha?.getSettings?.() ?? {};
   await travarAjustesAutomaticos();
   await atualizarListaDeCameras();
   return ajustes;
+}
+
+/**
+ * Pede à câmera a melhor resolução que ela declara suportar.
+ *
+ * Existe porque pedir `width: { ideal: 1920 }` na abertura **não bastou**, e
+ * isso foi medido: a câmera abriu em 640x480 mesmo declarando suportar bem
+ * mais. `ideal` é uma preferência que o navegador pondera junto com as outras,
+ * e ele costuma resolver por um modo de baixa resolução e taxa alta, que é o
+ * oposto do que serve aqui.
+ *
+ * O caminho determinístico é perguntar. `getCapabilities` diz o que a câmera
+ * aceita de fato, e `applyConstraints` pede aquilo, sem adivinhação.
+ *
+ * O teto de 1920 é a mesma decisão de antes: acima de 1080p o ganho de
+ * promediação cresce devagar e o custo de decodificar cada quadro cresce
+ * rápido, e **taxa de quadros estável vale mais que resolução** numa estimativa
+ * de frequência. Câmera de 4K entra em 1080p de propósito.
+ *
+ * Falhar aqui não é erro: câmera que não expõe `getCapabilities`, ou que
+ * recusa a mudança, continua medindo no modo em que abriu.
+ */
+async function subirResolucaoSePuder(trilha) {
+  if (!trilha?.getCapabilities || !trilha.applyConstraints) return;
+
+  let capacidades;
+  try {
+    capacidades = trilha.getCapabilities();
+  } catch {
+    return;
+  }
+
+  const larguraMaxima = capacidades?.width?.max;
+  const alturaMaxima = capacidades?.height?.max;
+  if (!larguraMaxima || !alturaMaxima) return;
+
+  const atual = trilha.getSettings?.() ?? {};
+  const alvoLargura = Math.min(1920, larguraMaxima);
+  const alvoAltura = Math.min(1080, alturaMaxima);
+
+  // Já está igual ou melhor que o alvo: mexer só arriscaria piorar.
+  if ((atual.width || 0) >= alvoLargura) return;
+
+  try {
+    await trilha.applyConstraints({
+      width: { ideal: alvoLargura },
+      height: { ideal: alvoAltura },
+      frameRate: { ideal: 30, min: 15 },
+    });
+  } catch {
+    // Combinação recusada: tenta só a largura, que é o que mais importa para a
+    // promediação. Altura o navegador deriva pela proporção do sensor.
+    try {
+      await trilha.applyConstraints({ width: { ideal: alvoLargura } });
+    } catch {
+      /* a câmera fica no modo em que abriu */
+    }
+  }
 }
 
 /**
@@ -752,7 +809,6 @@ function pararCamera() {
   regioesAtuais = null;
   faixasDeFundoAtuais = null;
   rastreador.reiniciar();
-  desenharRegioes(null, null);
 }
 
 /* A opção de deixar a tela branca para iluminar o rosto foi retirada.
@@ -762,66 +818,6 @@ function pararCamera() {
    não resolve o que a própria câmera introduz. Manter o botão só daria a
    impressão de que existe um ajuste capaz de salvar a medição. */
 
-/**
- * Desenha as regiões efetivamente medidas sobre o vídeo.
- *
- * Serve a um propósito concreto e não decorativo: sem ver as caixas seguirem o
- * rosto, "agora você pode se mover" é uma promessa que a tela não confirma. E
- * quando o rastreamento perde o rosto, a ausência das caixas explica sozinha
- * por que a medição parou.
- *
- * A caixa do rosto é desenhada mais apagada que as regiões porque ela não é
- * medida: ela só ancora. Mostrar as duas com o mesmo peso daria a entender que
- * a medição usa o rosto inteiro, inclusive olhos e boca, que são justamente o
- * que fica de fora.
- */
-function desenharRegioes(regioes, caixaRosto) {
-  const canvas = el.regioes;
-  if (!canvas) return;
-
-  const largura = el.palco.clientWidth;
-  const altura = el.palco.clientHeight;
-  if (!largura || !altura) return;
-
-  const densidade = Math.min(window.devicePixelRatio || 1, 2);
-  if (canvas.width !== Math.round(largura * densidade)) {
-    canvas.width = Math.round(largura * densidade);
-    canvas.height = Math.round(altura * densidade);
-  }
-
-  const ctx = canvas.getContext('2d');
-  ctx.setTransform(densidade, 0, 0, densidade, 0, 0);
-  ctx.clearRect(0, 0, largura, altura);
-
-  if (!regioes || regioes.length === 0) {
-    canvas.classList.remove('visivel');
-    return;
-  }
-  canvas.classList.add('visivel');
-
-  if (caixaRosto) {
-    ctx.strokeStyle = 'rgba(139, 147, 143, 0.45)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(
-      caixaRosto.x * largura,
-      caixaRosto.y * altura,
-      caixaRosto.largura * largura,
-      caixaRosto.altura * altura,
-    );
-  }
-
-  ctx.strokeStyle = 'rgba(78, 168, 122, 0.9)';
-  ctx.lineWidth = 1.5;
-  for (const regiao of regioes) {
-    if (!regiao || regiao.largura <= 0 || regiao.altura <= 0) continue;
-    ctx.strokeRect(
-      regiao.x * largura,
-      regiao.y * altura,
-      regiao.largura * largura,
-      regiao.altura * altura,
-    );
-  }
-}
 
 function laco() {
   if (!rodando) return;
@@ -837,6 +833,18 @@ function laco() {
     el.canvas.height = altura;
   }
   const ctx = el.canvas.getContext('2d', { willReadFrequently: true });
+  /*
+    Qualidade alta na redução, e isso não é estética.
+
+    É aqui que a média espacial de fato acontece: capturando em 1920 e
+    reduzindo para 320, cada pixel processado é a média de 36 pixels do sensor,
+    o que divide o ruído de leitura por seis antes de qualquer algoritmo agir.
+    Com a reamostragem de baixa qualidade o navegador descarta pixels em vez de
+    promediá-los, e boa parte dessa redução de ruído se perde justamente no
+    passo em que ela sairia de graça.
+  */
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(video, 0, 0, largura, altura);
 
   // Rastreamento antes da medição: as regiões acompanham o rosto, então a
@@ -852,7 +860,6 @@ function laco() {
       if (regioes) {
         regioesAtuais = regioes;
         faixasDeFundoAtuais = regioesDeFundo(caixa);
-        el.guia.classList.remove('visivel');
       } else if (rastreador.perdeuORosto) {
         // Perdeu o rosto de vez. Lista vazia faz o medidor relatar ausência de
         // pele, em vez de seguir medindo um lugar onde o rosto já não está.
@@ -860,9 +867,7 @@ function laco() {
         faixasDeFundoAtuais = null;
         // E o contorno volta, para a pessoa ter o que fazer: encaixar o rosto
         // nele é a saída quando o detector não acha.
-        el.guia.classList.add('visivel');
       }
-      desenharRegioes(regioesAtuais, caixa);
     }
   }
 
@@ -1030,7 +1035,6 @@ async function comecar() {
     ultimaAnalise = 0;
 
     if (fonte === 'tela') {
-      el.guia.classList.remove('visivel');
       const qualidade = avaliarCaptura(fluxo, null);
       const nome = plataformaDaCaptura?.nome;
       const avisos = qualidade.avisos.join(' ');
@@ -1040,7 +1044,6 @@ async function comecar() {
         qualidade.avisos.length ? 'alerta' : '',
       );
     } else if (fonte === 'dedo') {
-      el.guia.classList.remove('visivel');
       const acendeu = await ligarLanterna();
       dizer(
         acendeu
@@ -1053,7 +1056,6 @@ async function comecar() {
       // O contorno aparece até o rastreamento assumir. Enquanto o modelo não
       // chega, ou se o detector não achar o rosto, ele é a referência que a
       // pessoa tem; assim que a caixa for localizada, o laço o esconde.
-      el.guia.classList.add('visivel');
       // O aviso de câmera virtual tem precedência sobre a instrução normal:
       // medindo por uma delas, nenhuma instrução de postura vai salvar o
       // resultado, e insistir em dar dica de iluminação seria desviar do que
@@ -1153,7 +1155,6 @@ function parar() {
   rodando = false;
   if (animacao) cancelAnimationFrame(animacao);
   pararCamera();
-  el.guia.classList.remove('visivel');
   el.palcoVazio.hidden = false;
   el.btnParar.disabled = true;
   // Pelo estado da fonte, e não direto para falso: na fonte de chamada o botão
@@ -1172,7 +1173,6 @@ async function processarArquivo(arquivo) {
     el.btnSalvar.disabled = true;
     el.palcoVazio.hidden = true;
     el.palco.classList.add('arquivo');
-    el.guia.classList.add('visivel');
 
     const url = URL.createObjectURL(arquivo);
     el.video.srcObject = null;

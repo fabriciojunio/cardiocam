@@ -72,19 +72,17 @@
       <video id="video" playsinline muted></video>
       <canvas id="canvasOculto" hidden></canvas>
       <!--
-        Sobreposição das regiões medidas. Existe para que a pessoa veja que o
-        sistema está acompanhando o rosto dela, e não medindo um ponto fixo.
-        Sem isso, "pode se mover" é uma afirmação que a tela não sustenta.
-      -->
-      <canvas class="sobreposicao" id="canvasRegioes"></canvas>
+        O contorno oval e a linha dos olhos foram removidos.
 
-      <div class="guia" id="guia">
-        <div class="guia-oval"></div>
-        <div class="guia-olhos"><span>alinhe os olhos nesta linha</span></div>
-        <div class="guia-roi guia-testa"></div>
-        <div class="guia-roi guia-bochecha-e"></div>
-        <div class="guia-roi guia-bochecha-d"></div>
-      </div>
+        Eles existiam porque a versão anterior media num ponto fixo e dependia
+        de a pessoa se encaixar nele. Com o rosto sendo detectado e acompanhado,
+        pedir alinhamento é pedir que a pessoa faça um trabalho que o sistema
+        já faz, e enche a tela de instrução que não serve para nada.
+
+        A sobreposição com as regiões medidas também saiu. A informação é
+        legítima, mas o lugar dela é a página de diagnóstico: na tela de medir
+        ela competia com o que de fato importa, que é o número.
+      -->
 
       <div class="palco-leitura" id="palcoLeitura" hidden>
         <output id="bpmPalco">--</output>
