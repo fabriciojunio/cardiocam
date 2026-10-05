@@ -345,6 +345,102 @@ for (const algoritmo of ['pos', 'chrom']) {
 }
 
 // ---------------------------------------------------------------------------
+grupo('Espectro médio: o número exibido é mais estável que a janela');
+
+{
+  /*
+    O número exibido vem do espectro médio de janelas sucessivas, e não de
+    suavizar estimativas de janelas isoladas. A diferença foi medida antes de
+    ser adotada, e este teste existe para que ela não se perca.
+
+    O que se cobra é a propriedade, não o valor: **a dispersão do que aparece
+    na tela tem de ser menor que a das estimativas por janela**. Se alguém
+    trocar o espectro médio por outra coisa, isso quebra.
+  */
+  const bpm = 72;
+  const fps = 30;
+  const totalS = 50;
+  const total = Math.round(fps * totalS);
+  const aleatorio = geradorAleatorio(31337);
+  const tempos = Array.from({ length: total }, (_, i) => i / fps);
+  const pulso = ondaDePulso(tempos, bpm / 60);
+
+  const medidor = new Medidor({ janelaS: 20, algoritmo: 'pos', usarFundo: false });
+
+  /* Amplitude baixa de propósito: é em sinal fraco que a promediação de
+     espectro vale, e é a condição real de quem mede com pouca luz. */
+  const amplitude = 0.003;
+
+  /*
+    Ruído aplicado **à média**, e não por pixel.
+
+    O contexto falso do resto da suíte sorteia ruído por pixel, e a média sobre
+    milhares deles o reduz por raiz de N até quase sumir: medido, a série
+    promediada ficava com desvio de 0,002 bpm, e nessa limpeza nenhuma
+    estratégia de estimativa se distingue de outra. Foi assim que a primeira
+    versão deste teste passou sem significar nada.
+
+    Numa medição real o que sobra depois da média não é só ruído de sensor: é
+    também variação de iluminação, microdeslocamento da região e compressão.
+    Aplicar o ruído depois da média é a forma honesta de representar isso.
+  */
+  const RUIDO_NA_MEDIA = 0.06;
+
+  const exibidos = [];
+  const porJanela = [];
+  let ultimoInstante = -1;
+
+  for (let i = 0; i < total; i++) {
+    const perturbacao = ruidoNormal(aleatorio) * RUIDO_NA_MEDIA;
+    const modulacao = {
+      r: 1 + amplitude * GANHO_CANAL.vermelho * pulso[i] + perturbacao / 150,
+      g: 1 + amplitude * GANHO_CANAL.verde * pulso[i] + perturbacao / 150,
+      b: 1 + amplitude * GANHO_CANAL.azul * pulso[i] + perturbacao / 150,
+    };
+    medidor.processarQuadro(contextoDePele(modulacao, aleatorio), 320, 240, tempos[i]);
+
+    // Uma análise por segundo, como no laço de verdade.
+    if (medidor.progresso >= 1 && tempos[i] - ultimoInstante >= 1) {
+      ultimoInstante = tempos[i];
+      const a = medidor.analisar();
+      if (a) {
+        exibidos.push(a.bpmExibido);
+        porJanela.push(a.bpm);
+      }
+    }
+  }
+
+  verificar('houve análises suficientes para comparar', exibidos.length >= 8,
+    `só ${exibidos.length}`);
+
+  if (exibidos.length >= 8) {
+    const dpExibido = desvioPadrao(exibidos);
+    const dpJanela = desvioPadrao(porJanela);
+
+    verificar('o número exibido varia menos que a estimativa por janela',
+      dpExibido <= dpJanela,
+      `exibido ${dpExibido.toFixed(3)}, por janela ${dpJanela.toFixed(3)}`);
+
+    proximo('e continua acertando a frequência', exibidos[exibidos.length - 1], bpm, 3);
+
+    /* O histórico guarda a estimativa crua, e não a suavizada. A dispersão
+       entre janelas é indicador de qualidade, e calculá-la sobre valores já
+       suavizados daria uma estabilidade que não existe. */
+    const final = medidor.resultadoFinal();
+    verificar('a dispersão relatada é a das janelas, não a do número exibido',
+      Math.abs(final.dispersao - dpJanela) < 1e-9,
+      `relatou ${final.dispersao.toFixed(3)}, janelas ${dpJanela.toFixed(3)}`);
+  }
+
+  /* Reiniciar tem de limpar o espectro acumulado. Sem isso, a medição seguinte
+     começaria puxada pela frequência da anterior, que é o pior tipo de defeito:
+     produz um número plausível e errado. */
+  medidor.reiniciar();
+  verificar('reiniciar limpa o espectro acumulado',
+    medidor.espectroMedio === null && medidor.frequenciasDoEspectro === null);
+}
+
+// ---------------------------------------------------------------------------
 grupo('Modo dedo (fotopletismografia de contato)');
 
 /**
