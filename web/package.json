@@ -15,6 +15,7 @@
     "test:navegador:real": "node testes/testar_no_navegador.mjs --real",
     "test:navegador:lenta": "node testes/testar_no_navegador.mjs --real --exposicao-maxima",
     "medir:taxas": "node testes/navegador/medir_taxas.mjs",
-    "medir:exposicao": "node testes/navegador/medir_exposicao.mjs"
+    "medir:exposicao": "node testes/navegador/medir_exposicao.mjs",
+    "medir:troca": "node testes/navegador/medir_troca_de_resolucao.mjs"
   }
 }
