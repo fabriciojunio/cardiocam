@@ -103,6 +103,29 @@ correções de baixo custo computacional recuperam parte dessa perda.
   entre as janelas aceitas mais do que qualquer das correções de sinal, ao custo
   de cobertura.
 
+**Estado das hipóteses na camada sintética**, antes do início da IC e declarado
+como trabalho anterior:
+
+| | Instrumento | Primeira medida |
+| --- | --- | --- |
+| H1 | construído | **sim**, e com resultado: há um limiar de validade |
+| H2 | construído | pendente |
+| H3 | construído | pendente |
+| H4 | construído | **sim**: erro cai de 10,51 para 6,01 bpm a 87,5% de cobertura |
+
+O resultado de H1 merece destaque porque restringe a própria hipótese. Sob luz
+branca, CHROM e POS **cancelam a componente especular como foram projetados para
+cancelar**, e o erro fica em centésimos de bpm. A degradação aparece quando a
+cromaticidade do iluminante se afasta do branco: medindo, o POS colapsa em desvio
+0,4 e o CHROM em 0,6.
+
+Isso muda a formulação de H1 para a camada de dado real: a pergunta deixa de ser
+"o especular degrada?" e passa a ser **"a iluminação real de uma sala se afasta o
+bastante do branco para cruzar esse limiar?"**. É uma pergunta mais estreita,
+mais fácil de responder e mais útil, e só apareceu porque a camada sintética
+permite varrer uma coisa de cada vez. Detalhe e tabela em
+`05-resultados-preliminares.md`, seção 5.2.
+
 ### 1.4 Contribuição esperada
 
 Um estudo comparativo reprodutível, com código aberto e protocolo publicado,
@@ -176,6 +199,17 @@ A decisão metodológica deste projeto é começar pelos clássicos, por três
 motivos: rodam em CPU e em tempo real, são interpretáveis o suficiente para que
 a causa de uma falha seja identificável, e servem de linha de base obrigatória.
 Um método aprendido entra na etapa 5 como comparação, não como ponto de partida.
+
+**Há aprendizado no sistema, e ele está noutro lugar.** O modelo que decide
+quando recusar medir é uma regressão logística bayesiana sobre características da
+janela, descrita em 5.3. A escolha de não usar rede aqui é deliberada e tem três
+razões. A primeira é de dado: são algumas centenas de janelas, regime em que um
+modelo com uma dezena de parâmetros e priori própria é mais defensável do que um
+com milhões. A segunda é que os pesos precisam ser **lidos**, porque parte do
+valor do resultado está em qual característica o modelo usou, e foi assim que ele
+reencontrou sozinho a falha conhecida do ICA. A terceira é que a decisão é
+recusar, e recusa feita por modelo que não sabe quando não sabe seria a mesma
+patologia que o trabalho inteiro critica.
 
 ### 2.4 Números de referência da literatura
 

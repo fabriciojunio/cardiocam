@@ -340,6 +340,42 @@ algoritmo passaram a convergir na faixa de 66 a 74 bpm. Essa concordância é a
 evidência mais forte disponível sem um oxímetro ao lado: regiões e algoritmos
 diferentes não têm por que errar juntos no mesmo valor.
 
+## 4.5 Saber quando não medir
+
+O sistema sempre devolve um número, e esse é o problema que falta resolver.
+Quando a janela é ruim, o número errado tem exatamente a mesma aparência do
+certo. Os três testes de "não sei" cobrem os casos extremos, parede lisa, imagem
+saturada e vídeo curto; o caso que machuca é o do meio, em que há sinal, o
+espectro tem pico, e a estimativa está a quarenta batimentos da verdade.
+
+A solução implementada estima, para cada janela, a probabilidade de a estimativa
+estar dentro de 3 bpm, e recusa responder abaixo de um limiar. O modelo é uma
+regressão logística bayesiana ajustada por aproximação de Laplace, sobre
+características que não dependem da resposta certa: relação sinal-ruído,
+entropia espectral, proeminência do pico, dispersão da frequência entre
+subjanelas e correlação com o fundo.
+
+**O resultado**, sobre 335 janelas, com a partição feita por condição de modo que
+o teste meça acerto numa perturbação nunca vista:
+
+| | Erro médio | Cobertura |
+| --- | ---: | ---: |
+| Respondendo sempre | 10,51 bpm | 100% |
+| Com abstenção | 6,01 bpm | 87,5% |
+
+**O achado que mais vale.** Os pesos são legíveis, e dois deles dizem a mesma
+coisa. Entropia espectral entra com peso positivo e proeminência do pico com peso
+negativo: dado o SNR, espectro **limpo demais** indica resposta errada. É
+exatamente a falha do ICA descrita em 2.5, agora saindo do dado sem ninguém ter
+contado ao modelo.
+
+**O que ele não resolve.** Quando a interferência é cromaticamente alinhada com o
+pulso, nenhuma característica de janela a distingue. Isso foi medido: varrendo o
+afastamento do iluminante em relação ao branco, o POS colapsa em desvio 0,4 e o
+CHROM em 0,6, os dois saltando de 0,05 para 34,5 bpm de erro. É um limiar de
+validade da hipótese de tom de pele fixo, e é limite físico, não deficiência do
+modelo.
+
 ## 5. Limitações
 
 - Não é dispositivo médico e não serve para diagnóstico.
@@ -358,9 +394,19 @@ diferentes não têm por que errar juntos no mesmo valor.
 Marcos faciais no lugar da caixa retangular dariam regiões que acompanham a
 expressão. Compensação de movimento por fluxo óptico atacaria a limitação
 principal. Uma validação contra oxímetro de dedo permitiria reportar erro contra
-padrão-ouro em vez de contra simulação. E o critério de seleção de componente do
+padrão-ouro em vez de contra simulação. O critério de seleção de componente do
 ICA pode ser melhorado exigindo presença de harmônico, já que um pulso real tem
 energia em 2f e uma interferência senoidal não.
+
+Essa última ideia foi testada e **não funciona como está escrita acima**, o que
+vale registrar. A razão harmônica entrou como característica do modelo de 4.5 e
+não sustentou o próprio peso: ficou em +0,199 com desvio de 0,558. O motivo é
+concreto e não tem a ver com a ideia estar errada. O espectro usado chega
+recortado na banda cardíaca, de 0,7 a 4 Hz, então para qualquer pulso acima de
+120 bpm o primeiro harmônico cai **fora** da faixa disponível e a característica
+deixa de ser observável justamente na metade alta da banda. Para a ideia valer,
+o harmônico precisa ser medido num espectro mais largo que o da banda, o que é
+uma mudança no pipeline e não no critério.
 
 ## Referências
 

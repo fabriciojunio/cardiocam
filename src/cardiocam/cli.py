@@ -264,6 +264,73 @@ def _comando_avaliar(argumentos: argparse.Namespace) -> int:
     return 0
 
 
+# Quebra de linha como constante: este arquivo e montado por script e um
+# literal de escape dentro de f-string ja foi corrompido uma vez.
+NOVA_LINHA = chr(10)
+
+
+def _comando_qualidade(argumentos: argparse.Namespace) -> int:
+    """Treina o modelo de abstenção e imprime a curva de erro contra cobertura.
+
+    É o comando que materializa a hipótese H4: medir se recusar janela ruim
+    compra mais erro do que qualquer correção de sinal, e a que custo de
+    cobertura.
+    """
+    from cardiocam.avaliacao.benchmark import cenarios_de_robustez
+    from cardiocam.qualidade.coleta import coletar
+    from cardiocam.qualidade.treino import treinar
+
+    cenarios = cenarios_padrao() + cenarios_de_robustez()
+    print(
+        f"Coletando janelas de {len(cenarios)} cenários "
+        f"x {len(ALGORITMOS_DISPONIVEIS)} algoritmos. Isso roda o pipeline "
+        f"inteiro e demora." + NOVA_LINHA
+    )
+    amostras, falhas = coletar(cenarios, agrupar_por=argumentos.agrupar_por)
+    print(
+        f"{len(amostras)} janelas com estimativa, "
+        f"{falhas} recusadas pelo pipeline." + NOVA_LINHA
+    )
+
+    relatorio = treinar(
+        amostras,
+        tolerancia_bpm=argumentos.tolerancia,
+        cobertura_minima=argumentos.cobertura_minima,
+        erro_alvo_bpm=argumentos.erro_alvo,
+    )
+
+    print("## Resumo" + NOVA_LINHA)
+    print(relatorio.resumo())
+    print(NOVA_LINHA + "## Peso de cada característica" + NOVA_LINHA)
+    print("| Característica | Peso | Desvio | Sustentado pelo dado |")
+    print("| --- | ---: | ---: | :---: |")
+    regressao = relatorio.modelo.regressao
+    for nome, peso in regressao.pesos.items():
+        desvio = regressao.desvios_dos_pesos[nome]
+        sustenta = "sim" if abs(peso) > desvio else "não"
+        print(f"| {nome} | {peso:+.3f} | {desvio:.3f} | {sustenta} |")
+    print(NOVA_LINHA + "## Curva de erro contra cobertura" + NOVA_LINHA)
+    print(relatorio.curva_no_teste.tabela())
+    print(NOVA_LINHA + "## Diagrama de confiabilidade" + NOVA_LINHA)
+    print(relatorio.calibracao_no_teste.tabela())
+
+    if argumentos.saida:
+        partes = [
+            "# Abstenção com incerteza calibrada",
+            "## Resumo",
+            relatorio.resumo(),
+            "## Curva de erro contra cobertura",
+            relatorio.curva_no_teste.tabela(),
+            "## Diagrama de confiabilidade",
+            relatorio.calibracao_no_teste.tabela(),
+        ]
+        texto = (NOVA_LINHA * 2).join(partes) + NOVA_LINHA
+        with open(argumentos.saida, "w", encoding="utf-8") as arquivo:
+            arquivo.write(texto)
+        print(NOVA_LINHA + f"Relatório gravado em {argumentos.saida}.")
+    return 0
+
+
 def _adicionar_opcoes_analise(analisador: argparse.ArgumentParser) -> None:
     analisador.add_argument(
         "--algoritmo",
@@ -369,6 +436,40 @@ def construir_analisador() -> argparse.ArgumentParser:
     )
     avaliacao.add_argument("--saida", help="grava o relatório em Markdown")
     avaliacao.set_defaults(funcao=_comando_avaliar)
+
+    qualidade = subcomandos.add_parser(
+        "qualidade",
+        help="treina o modelo de abstenção e mede erro contra cobertura",
+    )
+    qualidade.add_argument(
+        "--tolerancia",
+        type=float,
+        default=3.0,
+        help="erro em bpm abaixo do qual a janela conta como acerto",
+    )
+    qualidade.add_argument(
+        "--cobertura-minima",
+        type=float,
+        default=0.4,
+        dest="cobertura_minima",
+        help="fração mínima de janelas em que o sistema aceita responder",
+    )
+    qualidade.add_argument(
+        "--erro-alvo",
+        type=float,
+        default=2.0,
+        dest="erro_alvo",
+        help="erro médio em bpm que se quer atingir entre as janelas aceitas",
+    )
+    qualidade.add_argument(
+        "--agrupar-por",
+        choices=("condicao", "frequencia"),
+        default="condicao",
+        dest="agrupar_por",
+        help="o que não pode aparecer em duas partições ao mesmo tempo",
+    )
+    qualidade.add_argument("--saida", help="grava o relatório em Markdown")
+    qualidade.set_defaults(funcao=_comando_qualidade)
 
     return analisador
 

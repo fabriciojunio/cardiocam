@@ -59,7 +59,16 @@ resposta do controle automático de exposição.
 séries geradas têm de sair idênticas às de antes, bit a bit. Um simulador que
 muda de resposta ao ganhar um recurso invalida toda medição anterior sem avisar.
 
-*Estado: já iniciada. O módulo existe e está documentado.*
+*Estado: concluída na camada sintética.* Os quatro mecanismos entraram:
+componente especular com cromaticidade de iluminante configurável, movimento de
+câmera com série de fundo gerada, desregistro da região e tons de pele. Desfoque
+por movimento e resposta do controle de exposição continuam pendentes, e ficam
+para a reavaliação sob movimento forte.
+
+O critério de aceitação foi transformado em teste automatizado
+(`test_os_parametros_novos_no_padrao_nao_mudam_nada`): com tudo no padrão, a
+série sai idêntica à anterior, e a tabela dos 56 cenários continua comparável
+com a publicada.
 
 ### 3. Experimento de movimento, camada sintética (meses 2 a 4)
 
@@ -75,6 +84,14 @@ cromaticidade.
 **O experimento de H2** é comparar movimento de cabeça contra movimento de
 câmera com a rectificação por fundo ligada. Se a rectificação ajudar no
 primeiro e **piorar** no segundo, H2 se confirma.
+
+*Estado: primeira varredura de H1 feita, e ela estreitou a hipótese.* Sob luz
+branca CHROM e POS cancelam o especular como foram projetados para cancelar; a
+degradação aparece a partir de um afastamento cromático do iluminante, e o
+limiar foi medido. A pergunta para a camada de dado real passa a ser se a
+iluminação de uma sala cruza esse limiar. Tabela em
+`05-resultados-preliminares.md`, seção 5.2. A varredura fatorial completa, com
+várias sementes, continua pendente.
 
 ### 4. Experimento de tom de pele, camada sintética (meses 3 e 4)
 
@@ -127,6 +144,14 @@ Quatro candidatas, avaliadas uma a uma e depois combinadas:
 **O experimento de H4** compara o ganho da abstenção contra o ganho das
 correções de sinal, com a cobertura declarada em cada ponto. A curva de erro
 contra cobertura é o produto desta etapa.
+
+*Estado: instrumento pronto e primeira curva medida na camada sintética.* O
+modelo é uma regressão logística bayesiana sobre características da janela, com
+três partições e agrupamento por condição, e `cardiocam qualidade` produz a
+curva inteira. Primeira medida: o erro cai de 10,51 para 6,01 bpm recusando
+12,5% das janelas. Falta o que só dado real responde, que é se a ordenação
+aprendida em cenário sintético transfere para sujeito de verdade. Seção 5.3 de
+`05-resultados-preliminares.md` e ADR 5 do repositório.
 
 ### 9. Relatório parcial (mês 5)
 
