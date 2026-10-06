@@ -34,6 +34,53 @@ estraga a medição na versão automática.
 O ICA ficou de fora porque exigiria portar o FastICA, e ele é justamente o
 algoritmo que teve o pior desempenho no comparativo.
 
+## A cadência de quadros, e as três falhas que ela cobre
+
+`js/cadencia.js` é a camada que decide **quando** um quadro é lido. Ela ficou
+separada do resto porque foi onde apareceram as falhas mais caras do porte, e
+porque dentro de `app.js` não havia como testá-la: dependia de elemento de
+vídeo, de `requestVideoFrameCallback` e do relógio do navegador. Agora os três
+entram por parâmetro.
+
+**Quadro repetido.** O laço original usava `requestAnimationFrame`, que dispara
+na taxa do monitor e não na da câmera. Com tela de 60 Hz e câmera a 20, o mesmo
+quadro entrava três vezes na série, com três carimbos de tempo diferentes.
+Cópia carrega o mesmo ruído do sensor, então a promediação deixa de reduzir
+ruído na proporção que o código supõe; e como a razão entre as duas taxas varia
+ao longo do tempo, a duplicação injeta uma modulação lenta perto da banda
+cardíaca. Era o que fazia a leitura ser descartada "independente da luz".
+
+**Base de tempo misturada.** A correção acima trouxe um defeito próprio:
+`performance.now()` conta desde o carregamento da página e chega às dezenas de
+segundos, enquanto `mediaTime` começa do zero. Com os dois na mesma série, a
+duração acumulada ficava negativa e a barra de progresso nunca completava. Vale
+uma base só, e ela é a da mídia.
+
+**Cadeia morta em silêncio.** `requestVideoFrameCallback` só dispara quando
+chega quadro novo, então, se a câmera para, o único evento capaz de religar o
+agendamento é justamente o que deixou de acontecer. A câmera "desligava
+sozinha". O vigia roda em `requestAnimationFrame`, que não depende da câmera,
+percebe o silêncio e reata; depois de três resgates seguidos ele desiste do
+callback de vídeo e passa a puxar quadro na taxa do monitor, rejeitando
+repetido pelo tempo de mídia.
+
+Vale registrar o modo como a terceira falha sobreviveu a uma correção: o vigia
+tinha sido escrito, comentado e publicado, e era armado **só dentro do ramo de
+reserva**, que nenhum navegador atual usa. Defesa escrita e não instalada passa
+em revisão de código e falha na mão de quem mede. O teste `o vigia é armado
+também no caminho do callback` existe para isso, e foi conferido por mutação:
+reintroduzindo a condição antiga, a suíte falha.
+
+Fora da cadência, `app.js` escuta `mute`, `unmute` e `ended` na trilha de
+vídeo. São os eventos que dizem **por que** parou de chegar quadro, e sem eles
+a página ficava dizendo "Medindo" sobre uma imagem congelada.
+
+Quando a captura precisa ser resgatada, a janela de coleta recomeça. Meio
+segundo sem quadro são dez amostras faltando a 20 por segundo, e a análise
+espectral trata a série como amostrada uniformemente: com um buraco no meio, o
+progresso chega a 100% sem que as amostras existam e a frequência sai de uma
+base de tempo que não corresponde ao que foi coletado.
+
 ## Testes
 
 ```bash
@@ -41,11 +88,12 @@ cd web
 npm test
 ```
 
-276 casos, sem navegador e sem dependências. Verificam a FFT, o filtro, a
+459 casos, sem navegador e sem dependências. Verificam a FFT, o filtro, a
 estimativa de frequência varrendo de 46 a 196 bpm, os três algoritmos sobre
-séries RGB modeladas fisicamente, a segmentação de pele em sete tons e o
+séries RGB modeladas fisicamente, a segmentação de pele em sete tons, o
 pipeline completo com um canvas falso que devolve pixels de pele modulados por
-um pulso de frequência conhecida.
+um pulso de frequência conhecida, a cascata de Haar contra o OpenCV e a
+cadência de quadros com relógio e filas de agendamento sob controle.
 
 O porte reproduz o mesmo resultado da versão em Python no cenário decisivo: sob
 interferência de iluminação dentro da banda cardíaca, CHROM e POS acertam e o
