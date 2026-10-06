@@ -161,7 +161,14 @@ Para investigar uma câmera nova:
 ```bash
 npm run medir:taxas       # taxa entregue em cada resolução
 npm run medir:exposicao   # taxa entregue em cada tempo de exposição
+npm run medir:troca       # trocar de resolução derruba o dispositivo?
 ```
+
+O terceiro cobre a outra metade da correção. Medido na EMEET: de 1920x1080 para
+1280x720 em 561 ms, trilha continuando `live`, nenhum evento `mute` ou `ended`,
+mesmo `deviceId`, e 33 quadros em dois segundos antes e depois. É isso que
+`applyConstraints` compra em relação a fechar e reabrir, que apaga e acende a
+luz da webcam e zera a janela de coleta.
 
 O porte reproduz o mesmo resultado da versão em Python no cenário decisivo: sob
 interferência de iluminação dentro da banda cardíaca, CHROM e POS acertam e o
