@@ -206,18 +206,15 @@ const DEGRAUS_DE_QUALIDADE = Object.freeze([
 /** O degrau em uso. Começa no melhor e desce sozinho se a máquina não aguentar. */
 let degrauAtual = 0;
 
-/**
- * Taxa de quadros abaixo da qual vale descer um degrau de resolução.
- *
- * Desceu de 20 para 14 quando a taxa pedida passou a ser 20: reprovar a 20
- * quando se pede 20 derrubaria a resolução em toda medição.
- *
- * O valor não vem de Nyquist, que para 3,3 Hz pediria 6,6. Vem de que taxa
- * abaixo disso costuma significar que a máquina está **perdendo** quadros, e
- * quadro perdido é amostra faltando em instante irregular, que é o que mais
- * atrapalha a análise espectral.
- */
-const QUADROS_MINIMOS_ACEITAVEIS = 14;
+/*
+  A taxa mínima mora em `exposicao.js`, e aqui só é usada.
+
+  Ela existia duas vezes, com valores diferentes: 14 neste arquivo, para decidir
+  baixar a resolução, e um teto de 20 nas restrições da câmera, para comprar
+  exposição. Os dois números falavam da mesma grandeza sem saber um do outro, e
+  foi dessa discordância que saiu o ciclo de reaberturas da câmera. Constante
+  repetida é combinada que cada metade do programa cumpre à sua maneira.
+*/
 
 /**
  * Quadros processados antes de julgar o desempenho.
@@ -283,7 +280,7 @@ async function ajustarQualidadeSeNecessario() {
     degrau: degrauAtual,
     luz: medidor.luminanciaMedia,
   });
-  if (entregue >= QUADROS_MINIMOS_ACEITAVEIS) return;
+  if (entregue >= TAXA_MINIMA) return;
 
   /*
     Exposição antes de resolução, porque foi o que a medida mostrou.
