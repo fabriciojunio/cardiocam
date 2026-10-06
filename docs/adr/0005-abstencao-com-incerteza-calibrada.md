@@ -95,27 +95,64 @@ falsos; log-perda é suave e é uma regra de pontuação própria.
 
 ## Consequências
 
-**O que foi medido.** Sobre 335 janelas da bateria sintética, com partição por
-condição: o erro cai de 10,51 bpm respondendo sempre para 6,01 bpm com 87,5% de
-cobertura.
+**O resultado tem dois lados, e o negativo é o mais informativo.** Sobre 349
+janelas da bateria sintética:
 
-**O modelo redescobriu um defeito conhecido do projeto.** Os pesos de entropia
-espectral e de proeminência dizem a mesma coisa: dado o SNR, espectro **limpo
-demais** indica resposta errada. É o que o README já afirmava em prosa sobre o
-ICA, "uma interferência senoidal forte é mais limpa que um pulso real", agora
-saindo do dado sem ninguém ter dito ao modelo.
+| Partição | Respondendo sempre | Melhor com abstenção |
+| --- | ---: | ---: |
+| Por frequência, artefato conhecido | 8,16 bpm | 0,01 bpm a 40,7% |
+| Por condição, artefato nunca visto | 10,52 bpm | 8,01 bpm a 16,4% |
 
-**O que o modelo não resolve, e não vai resolver com mais característica.**
-Quando a interferência é cromaticamente alinhada com o pulso, nenhuma
-característica de janela a distingue, e o erro no teste tem piso. Isso está
-medido na varredura de desvio do iluminante e é um limite físico, não uma
-deficiência de ajuste.
+Quando o tipo de artefato está no treino, o modelo separa janela boa de ruim
+quase perfeitamente. Quando o artefato é inédito, mantendo cobertura razoável,
+o ganho some. A conclusão prática: **o modelo de qualidade precisa ser treinado
+nos artefatos que vão ocorrer, e o modo de falha dele é o artefato inédito.**
+
+**A primeira medição deste módulo foi melhor, e era artefato da implementação.**
+Antes da reconciliação com `fontes/movimento.py`, a física de movimento era uma
+senoide escrita à mão neste repositório em duplicata, e o número dava 6,01 bpm a
+87,5% de cobertura. Com a física correta, de ruído de banda, o número caiu. O
+primeiro resultado não estava errado por descuido de medição: estava medindo um
+mundo mais fácil do que o real.
+
+**Por que o artefato inédito escapa.** O pior deles produz um espectro excelente.
+Movimento rítmico dentro da banda cardíaca cria um pico concorrente limpo, e o
+método trava nele: relação sinal-ruído alta, pico proeminente, frequência estável
+entre subjanelas. Toda característica de janela diz "boa janela". Movimento de
+banda larga, ao contrário, derruba a relação sinal-ruído e cai no portão que já
+existia; é a falha benigna.
+
+**A característica que domina é a razão harmônica** (+4,56 com desvio de 0,88).
+A física explica: o pulso sobe rápido e desce devagar, então deposita energia em
+2f; uma oscilação de iluminação é senoidal e não deposita. Isso valida, com
+medida, a sugestão que o relatório da disciplina tinha listado como trabalho
+futuro para o critério de seleção do ICA.
+
+Vale registrar que uma avaliação anterior, feita sobre a bateria com física de
+senoide, concluiu o contrário: que a razão harmônica não sustentava o próprio
+peso. A conclusão estava certa para aquele conjunto e errada sobre o mundo. É um
+bom lembrete de que característica se avalia contra o fenômeno, não contra o
+gerador.
 
 **O que o modelo honestamente não sabe.** Quatro características não variam no
 caminho analítico, por não haver imagem: fração de pele, fração saturada,
 deslocamento da região e jitter. Os pesos delas ficam em zero com o desvio da
-priori, e isso é a resposta certa, "não observei", em vez de um número que depois
-seria lido como informação. Há teste cobrando.
+priori, e isso é a resposta certa, "não observei". Há teste cobrando. É também a
+razão mais provável de o módulo render mais em dado real do que aqui: as
+características que descrevem a **imagem** são justamente as que esta camada não
+consegue exercitar.
+
+**A calibração continua insuficiente.** O ECE fica em 0,26 depois da correção por
+temperatura. A descalibração que sobra está nas faixas do meio, onde a partição
+de calibração tem poucas janelas, e um limiar escolhido sobre probabilidade
+descalibrada significa menos do que promete.
+
+**A incerteza epistêmica não cobriu o caso inédito.** Era a esperança do desenho
+bayesiano: que o modelo se declarasse incerto sobre o artefato que nunca viu. Não
+aconteceu, e a razão é entendível: a posteriori só se alarga em direções com
+pouca dispersão no treino, e um artefato semanticamente novo pode cair numa
+região do espaço de características que o treino cobre bem. Incerteza sobre os
+pesos não é incerteza sobre o fenômeno.
 
 ## Alternativas descartadas
 

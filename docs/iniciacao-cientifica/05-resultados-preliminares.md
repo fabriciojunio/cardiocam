@@ -128,15 +128,15 @@ Dois achados aqui, e os dois entram no projeto:
 
 ## 3. Testes automatizados
 
-**2.176 casos em Python e 373 no navegador**, e nenhum usa simulacro no lugar do
+**2.198 casos em Python e 373 no navegador**, e nenhum usa simulacro no lugar do
 código real. A estratégia é a mesma em todos os níveis: gerar um sinal cuja
 frequência verdadeira foi escolhida por nós, rodar o sistema de verdade e
 conferir o que sai.
 
 | Nível | Casos | O que exercita |
 | --- | ---: | --- |
-| Unidade | 1.478 | resposta em frequência do filtro medida em dezenas de frequências; recuperação de senoides varrendo 45 a 220 bpm em passos de 2,5 bpm; remoção de tendência; rectificação; detecção de picos; geometria; **segmentação de pele em oito tons diferentes** |
-| Integração | 600 | os quatro algoritmos sobre séries modeladas fisicamente, variando tom de pele, taxa de quadros, amplitude, ruído e interferência; pipeline, fontes, interface, linha de comando e ajustes de câmera |
+| Unidade | 1.499 | resposta em frequência do filtro medida em dezenas de frequências; recuperação de senoides varrendo 45 a 220 bpm em passos de 2,5 bpm; remoção de tendência; rectificação; detecção de picos; geometria; **segmentação de pele em oito tons diferentes** |
+| Integração | 601 | os quatro algoritmos sobre séries modeladas fisicamente, variando tom de pele, taxa de quadros, amplitude, ruído e interferência; pipeline, fontes, interface, linha de comando e ajustes de câmera |
 | Ponta a ponta | 98 | vídeo renderizado quadro a quadro, cascata de Haar procurando o rosto de fato, até o número final |
 
 Cobertura de 87%. O que fica fora é quase todo o código que só executa com
@@ -224,89 +224,129 @@ A conclusão foi construir a bateria de robustez, que é o instrumento das três
 primeiras hipóteses. Ela entra no gerador como componente especular, movimento de
 câmera com fundo gerado, e tons de pele.
 
-### 5.2 O achado sobre H1: existe um limiar de validade, e ele foi medido
+### 5.2 O achado sobre H1: a proteção cromática existe, e ela acaba
 
 A componente especular soma na cor do **iluminante**, e não na da pele. É isso
 que move a direção cromática em que CHROM e POS se apoiam.
 
-A primeira implementação escalava o termo pelo canal, e o efeito mediu zero:
-multiplicar pela cor da pele devolve um termo proporcional a ela, que é uma
-variação de brilho disfarçada, e os dois métodos cancelam isso por construção. A
-correção foi escalar pela intensidade média, igual nos três canais. A luz que
-quica na superfície não sabe de que cor é a pele, e é essa independência que
-produz o efeito.
-
-Com a física correta, varrendo o afastamento do iluminante em relação ao branco:
+Varrendo o afastamento do iluminante com movimento rítmico de 12 px, quatro
+frequências por linha, erro absoluto médio em bpm:
 
 | Desvio do iluminante | VERDE | CHROM | POS | ICA |
 | --- | ---: | ---: | ---: | ---: |
-| 0,0 (branco) | 34,51 | 0,04 | 0,12 | 34,51 |
-| 0,2 | 34,51 | 0,04 | 0,06 | 34,51 |
-| 0,4 | 34,51 | 0,05 | **34,55** | 34,51 |
-| 0,6 | 34,51 | **34,53** | 34,53 | 34,51 |
-| 1,0 | 34,51 | 34,52 | 34,51 | 34,54 |
+| 0,0 neutro | 18,01 | 0,02 | 0,02 | 25,51 |
+| 0,5 | 18,01 | 0,01 | 0,02 | 25,51 |
+| 0,75 | 18,01 | **20,00** | 0,04 | 18,00 |
+| 1,0 | 18,01 | 31,50 | **31,51** | 31,49 |
 
-Erro absoluto médio em bpm, quatro frequências por linha, especular a 0,9 Hz,
-dentro da banda cardíaca.
+**Três leituras, e as três sustentam a formulação de H1.**
 
-**A leitura.** Sob luz branca, CHROM e POS cancelam o especular exatamente como
-foram projetados para cancelar, e o erro fica em centésimos de bpm. A proteção
-não é infinita: o POS colapsa em desvio 0,4 e o CHROM em 0,6, os dois saltando
-para 34,5 bpm, que é a distância média até a frequência da interferência.
+O VERDE erra em todos os pontos, o que é esperado: usando um canal só, não há
+como distinguir "chegou mais sangue" de "chegou mais luz".
 
-Isso é um **limiar de validade da hipótese de tom de pele fixo**, medido em vez
-de afirmado, e é a contribuição mais concreta que a camada sintética produziu até
-aqui. Em dado real as duas coisas vêm misturadas e não há como varrer uma
-mantendo a outra, que é precisamente o motivo de a camada 1 existir.
+CHROM e POS **cancelam o especular como foram projetados para cancelar**
+enquanto a cromaticidade fica perto da suposta, e o erro deles fica em
+centésimos de bpm. A proteção não é infinita: o CHROM quebra em desvio 0,75 e o
+POS em 1,0.
 
-### 5.3 O que a abstenção entrega
+A ordem entre os dois é a que a literatura prevê, com o POS proposto como
+melhoria sobre o CHROM. Aqui ela aparece **medida**, e com o ponto em que cada um
+cede.
+
+Isso estreita a hipótese de um jeito útil. A pergunta para a camada de dado real
+deixa de ser "o especular degrada?" e passa a ser **"a iluminação de uma sala se
+afasta o bastante do neutro para cruzar esse limiar?"**. É mais estreita, mais
+fácil de responder e mais útil, e só apareceu porque a camada sintética permite
+varrer uma coisa de cada vez.
+
+### 5.3 Dois regimes de movimento, e só um é perigoso
+
+Medidos separadamente, e a distinção não estava no projeto original:
+
+**Movimento de banda larga** espalha energia pelo espectro, derruba a relação
+sinal-ruído e o sistema **recusa** pelo portão que já existia. É a falha
+benigna: o resultado é silêncio, não mentira.
+
+**Movimento rítmico**, de banda estreita dentro da faixa cardíaca, é outra
+história. Alguém balançando a cabeça, caminhando ou numa esteira cria um pico
+concorrente limpo, o método trava nele, e a resposta sai com trinta batimentos de
+erro e com toda a aparência de correta.
+
+A consequência para o protocolo de coleta é direta: **registrar o tipo de
+movimento, e não só a amplitude**. Duas sessões com o mesmo deslocamento em
+pixels podem cair em regimes opostos.
+
+### 5.4 O que a abstenção entrega, e o que ela não entrega
 
 Modelo: regressão logística bayesiana por aproximação de Laplace, características
-da janela que não dependem da resposta certa, três partições, e a partição feita
-**por condição**, de modo que o teste mede acerto numa perturbação nunca vista.
+que não dependem da resposta certa, três partições.
 
-Sobre 335 janelas, com uma recusada pelo próprio pipeline:
+Sobre 349 janelas, com três recusadas pelo próprio pipeline:
 
-| | Erro médio | Cobertura |
+| Partição | Respondendo sempre | Melhor com abstenção |
 | --- | ---: | ---: |
-| Respondendo sempre | 10,51 bpm | 100% |
-| Com abstenção | **6,01 bpm** | 87,5% |
+| Por frequência, artefato conhecido | 8,16 bpm | **0,01 bpm** a 40,7% |
+| Por condição, artefato nunca visto | 10,52 bpm | 8,01 bpm a 16,4% |
 
-Erro 43% menor recusando 12,5% das janelas.
+**O lado positivo.** Com o tipo de artefato representado no treino, o modelo
+separa janela boa de ruim quase perfeitamente. No ponto de operação adotado, o
+erro cai de 8,16 para 5,39 bpm recusando metade das janelas.
 
-### 5.4 O modelo redescobriu um defeito que o projeto já conhecia
+**O lado negativo, e é o resultado que mais vale.** O modelo **não generaliza
+para um artefato que nunca viu**. Mantendo cobertura razoável, o ganho some.
 
-Os pesos são legíveis, e dois contam a mesma história:
+A razão é a de 5.3: o artefato que sobra é a trava num pico rítmico limpo, e ele
+produz um espectro **excelente**. Relação sinal-ruído alta, pico proeminente,
+frequência estável entre subjanelas. Toda característica de janela diz "boa
+janela".
+
+Isso tem consequência direta para o desenho da IC: a camada 3, de coleta local,
+precisa cobrir os tipos de artefato que se quer que o modelo detecte, e o
+relatório final precisa declarar quais tipos ficaram de fora. Prometer abstenção
+que funcione fora disso seria afirmar mais do que a medida sustenta.
+
+### 5.5 A característica que domina, e uma avaliação que se corrigiu
 
 | Característica | Peso | Desvio | Sustentado |
 | --- | ---: | ---: | :---: |
-| `snr_db` | +4,94 | 0,90 | sim |
-| `entropia_espectral` | +3,18 | 0,94 | sim |
-| `dispersao_do_pico_bpm` | +2,48 | 1,61 | sim |
-| `proeminencia` | −1,38 | 0,53 | sim |
-| `correlacao_com_fundo` | −1,18 | 0,28 | sim |
+| `razao_harmonica` | +4,56 | 0,88 | sim |
+| `jitter_temporal` | +0,93 | 0,74 | sim |
+| `snr_db` | +0,93 | 0,38 | sim |
+| `proeminencia` | −0,94 | 0,32 | sim |
+| `correlacao_com_fundo` | −0,48 | 0,19 | sim |
 
-Entropia com peso **positivo** e proeminência com peso **negativo** dizem, dado o
-SNR, que espectro limpo demais indica resposta errada. É exatamente a falha do
-ICA descrita na seção 2.2, agora saindo do dado sem ninguém ter contado ao
-modelo.
+A razão harmônica domina, e a física explica: o pulso sobe rápido e desce
+devagar, então deposita energia em 2f; uma oscilação de iluminação é senoidal e
+não deposita.
 
-Quatro características ficam com peso zero e desvio igual ao da priori, porque
-não variam no caminho analítico, que não tem imagem. Isso é a resposta certa,
-"não observei", em vez de um número que seria lido como informação. Há teste
-cobrando.
+**Uma avaliação anterior concluiu o oposto**, com peso de +0,199 contra desvio de
+0,558, e vale contar por quê. Naquele momento a física do especular era uma
+senoide escrita à mão, numa duplicata acidental de um módulo que já existia no
+repositório. Com a física correta, acionada por pose, a característica passa a
+discriminar. A conclusão antiga estava certa sobre o conjunto que tinha em mãos e
+errada sobre o fenômeno, que é a forma mais fácil de se enganar com dado
+sintético.
 
-### 5.5 Os limites, declarados
+Quatro características ficam com peso zero e o desvio da priori, porque não
+variam no caminho analítico, que não tem imagem: fração de pele, fração saturada,
+deslocamento da região e saturação. Isso é a resposta certa, "não observei", e é
+também a razão mais provável de o módulo render mais em dado real: as
+características que descrevem a **imagem** são exatamente as que esta camada não
+consegue exercitar.
 
-**A abstenção tem piso.** Quando a interferência é cromaticamente alinhada com o
-pulso, nenhuma característica de janela a distingue. Está medido na varredura de
-5.2 e é limite físico, não deficiência de ajuste.
+### 5.6 Os limites, declarados
 
-**A calibração ainda não está boa.** Depois da correção por temperatura, ajustada
-fora da amostra, o ECE fica em 0,165. A descalibração que sobra está nas faixas
-do meio, onde a partição de calibração tem poucas janelas. Com 14 condições e 15%
-para calibração, caem ali cerca de duas condições. Em dado real, com mais
-sujeitos, essa partição cresce.
+**A calibração não está boa.** Depois da correção por temperatura, ajustada fora
+da amostra, o ECE fica em 0,26. Um limiar escolhido sobre probabilidade
+descalibrada significa menos do que promete.
+
+**A incerteza bayesiana não cobriu o caso inédito.** Era a esperança do desenho:
+que o modelo se declarasse incerto sobre o artefato que nunca viu. Não aconteceu.
+A posteriori só se alarga em direções com pouca dispersão no treino, e um
+artefato semanticamente novo pode cair numa região bem coberta do espaço de
+características. Incerteza sobre os pesos não é incerteza sobre o fenômeno, e
+confundir as duas seria repetir, num nível acima, o erro que o projeto inteiro
+critica.
 
 **O conjunto é sintético.** Os números acima comparam configurações entre si e
 não afirmam desempenho absoluto. O portão continua valendo: reproduzir os 3,67
@@ -342,7 +382,7 @@ cd cardiocam
 python -m venv .venv && .venv\Scripts\activate
 pip install -e ".[dev]"
 
-pytest -n 4                 # os 2.176 testes
+pytest -n 4                 # os 2.198 testes
 cardiocam avaliar           # os 56 cenários da seção 2.1
 cardiocam diagnosticar      # a varredura da seção 2.3
 cardiocam qualidade         # a abstenção da seção 5

@@ -86,12 +86,15 @@ câmera com a rectificação por fundo ligada. Se a rectificação ajudar no
 primeiro e **piorar** no segundo, H2 se confirma.
 
 *Estado: primeira varredura de H1 feita, e ela estreitou a hipótese.* Sob luz
-branca CHROM e POS cancelam o especular como foram projetados para cancelar; a
-degradação aparece a partir de um afastamento cromático do iluminante, e o
-limiar foi medido. A pergunta para a camada de dado real passa a ser se a
-iluminação de uma sala cruza esse limiar. Tabela em
-`05-resultados-preliminares.md`, seção 5.2. A varredura fatorial completa, com
-várias sementes, continua pendente.
+neutra CHROM e POS cancelam o especular como foram projetados para cancelar; a
+degradação aparece a partir de um afastamento cromático do iluminante, e o limiar
+foi medido: o CHROM cede em desvio 0,75 e o POS em 1,0. A varredura também
+separou dois regimes de movimento que não estavam previstos, o de banda larga,
+que derruba a relação sinal-ruído e leva à recusa, e o rítmico, que cria pico
+concorrente e leva à resposta errada com aparência de certa. Isso acrescenta uma
+exigência ao protocolo de coleta: **registrar o tipo de movimento, e não só a
+amplitude**. Tabelas em `05-resultados-preliminares.md`, seções 5.2 e 5.3. A
+varredura fatorial completa, com várias sementes, continua pendente.
 
 ### 4. Experimento de tom de pele, camada sintética (meses 3 e 4)
 
@@ -145,12 +148,20 @@ Quatro candidatas, avaliadas uma a uma e depois combinadas:
 correções de sinal, com a cobertura declarada em cada ponto. A curva de erro
 contra cobertura é o produto desta etapa.
 
-*Estado: instrumento pronto e primeira curva medida na camada sintética.* O
-modelo é uma regressão logística bayesiana sobre características da janela, com
-três partições e agrupamento por condição, e `cardiocam qualidade` produz a
-curva inteira. Primeira medida: o erro cai de 10,51 para 6,01 bpm recusando
-12,5% das janelas. Falta o que só dado real responde, que é se a ordenação
-aprendida em cenário sintético transfere para sujeito de verdade. Seção 5.3 de
+*Estado: instrumento pronto, primeira curva medida, e o resultado é
+parcialmente negativo.* O modelo é uma regressão logística bayesiana sobre
+características da janela, com três partições, e `cardiocam qualidade` produz a
+curva inteira.
+
+Com o tipo de artefato representado no treino, a abstenção funciona: o erro cai
+de 8,16 para 5,39 bpm recusando metade das janelas. Com o artefato **inédito**,
+o ganho some mantendo cobertura razoável.
+
+Isso muda o experimento desta etapa. Ele deixa de ser "a abstenção ganha das
+correções de sinal?" e passa a ser **"a abstenção transfere entre tipos de
+artefato?"**, que é a pergunta que decide se ela serve em uso. Em dado real a
+pergunta vira transferência entre sujeitos, e é por isso que o agrupamento da
+partição precisa ser por sujeito. Seções 5.4 a 5.6 de
 `05-resultados-preliminares.md` e ADR 5 do repositório.
 
 ### 9. Relatório parcial (mês 5)

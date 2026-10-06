@@ -344,39 +344,52 @@ diferentes não têm por que errar juntos no mesmo valor.
 
 O sistema sempre devolve um número, e esse é o problema que falta resolver.
 Quando a janela é ruim, o número errado tem exatamente a mesma aparência do
-certo. Os três testes de "não sei" cobrem os casos extremos, parede lisa, imagem
-saturada e vídeo curto; o caso que machuca é o do meio, em que há sinal, o
-espectro tem pico, e a estimativa está a quarenta batimentos da verdade.
+certo.
 
 A solução implementada estima, para cada janela, a probabilidade de a estimativa
 estar dentro de 3 bpm, e recusa responder abaixo de um limiar. O modelo é uma
 regressão logística bayesiana ajustada por aproximação de Laplace, sobre
-características que não dependem da resposta certa: relação sinal-ruído,
-entropia espectral, proeminência do pico, dispersão da frequência entre
-subjanelas e correlação com o fundo.
+características que não dependem da resposta certa.
 
-**O resultado**, sobre 335 janelas, com a partição feita por condição de modo que
-o teste meça acerto numa perturbação nunca vista:
+**O resultado tem dois lados**, e o segundo é o que ensina:
 
-| | Erro médio | Cobertura |
+| Partição | Respondendo sempre | Melhor com abstenção |
 | --- | ---: | ---: |
-| Respondendo sempre | 10,51 bpm | 100% |
-| Com abstenção | 6,01 bpm | 87,5% |
+| Por frequência, artefato conhecido | 8,16 bpm | 0,01 bpm a 40,7% |
+| Por condição, artefato nunca visto | 10,52 bpm | 8,01 bpm a 16,4% |
 
-**O achado que mais vale.** Os pesos são legíveis, e dois deles dizem a mesma
-coisa. Entropia espectral entra com peso positivo e proeminência do pico com peso
-negativo: dado o SNR, espectro **limpo demais** indica resposta errada. É
-exatamente a falha do ICA descrita em 2.5, agora saindo do dado sem ninguém ter
-contado ao modelo.
+Quando o tipo de artefato está representado no treino, o modelo separa janela boa
+de ruim quase perfeitamente. Quando o artefato é inédito, mantendo cobertura
+razoável, o ganho some. **O modelo de qualidade precisa ser treinado nos
+artefatos que vão ocorrer**, e o modo de falha dele é o artefato que nunca viu.
 
-**O que ele não resolve.** Quando a interferência é cromaticamente alinhada com o
-pulso, nenhuma característica de janela a distingue. Isso foi medido: varrendo o
-afastamento do iluminante em relação ao branco, o POS colapsa em desvio 0,4 e o
-CHROM em 0,6, os dois saltando de 0,05 para 34,5 bpm de erro. É um limiar de
-validade da hipótese de tom de pele fixo, e é limite físico, não deficiência do
-modelo.
+**Por que o inédito escapa.** O pior deles produz um espectro excelente.
+Movimento rítmico dentro da banda cardíaca cria um pico concorrente limpo, e o
+método trava nele: relação sinal-ruído alta, pico proeminente, frequência estável
+entre subjanelas. Toda característica diz "boa janela", e a resposta está trinta
+batimentos fora. Movimento de banda larga, ao contrário, espalha energia e cai
+no portão de relação sinal-ruído que já existia.
 
-## 5. Limitações
+**A característica que domina é a razão harmônica**, com peso +4,56 e desvio de
+0,88, e isso confirma por medida a ideia listada em 6 como trabalho futuro.
+
+**Sobre H1.** Varrendo o afastamento cromático do iluminante com a componente
+especular ligada, com movimento rítmico de 12 px:
+
+| Desvio do iluminante | VERDE | CHROM | POS | ICA |
+| --- | ---: | ---: | ---: | ---: |
+| 0,0 neutro | 18,01 | 0,02 | 0,02 | 25,51 |
+| 0,5 | 18,01 | 0,01 | 0,02 | 25,51 |
+| 0,75 | 18,01 | **20,00** | 0,04 | 18,00 |
+| 1,0 | 18,01 | 31,50 | **31,51** | 31,49 |
+
+Três leituras. O **VERDE não tem proteção cromática nenhuma** e erra em todos os
+pontos, o que é coerente com usar um canal só. CHROM e POS têm proteção, e ela
+**acaba**: o CHROM quebra em desvio 0,75 e o POS só em 1,0. A ordem entre os dois
+é a que a literatura prevê, com o POS proposto como melhoria sobre o CHROM, e
+aqui ela aparece medida em vez de citada.
+
+## 5. Limitações## 5. Limitações
 
 - Não é dispositivo médico e não serve para diagnóstico.
 - É impossível medir a partir de uma foto. Frequência é uma grandeza temporal e
@@ -398,15 +411,21 @@ padrão-ouro em vez de contra simulação. O critério de seleção de component
 ICA pode ser melhorado exigindo presença de harmônico, já que um pulso real tem
 energia em 2f e uma interferência senoidal não.
 
-Essa última ideia foi testada e **não funciona como está escrita acima**, o que
-vale registrar. A razão harmônica entrou como característica do modelo de 4.5 e
-não sustentou o próprio peso: ficou em +0,199 com desvio de 0,558. O motivo é
-concreto e não tem a ver com a ideia estar errada. O espectro usado chega
-recortado na banda cardíaca, de 0,7 a 4 Hz, então para qualquer pulso acima de
-120 bpm o primeiro harmônico cai **fora** da faixa disponível e a característica
-deixa de ser observável justamente na metade alta da banda. Para a ideia valer,
-o harmônico precisa ser medido num espectro mais largo que o da banda, o que é
-uma mudança no pipeline e não no critério.
+Essa última ideia foi testada e **funciona**: a razão harmônica entrou como
+característica do modelo de 4.5 e virou a de maior peso, +4,56 contra um desvio
+de 0,88. É a característica que separa pulso de senoide de iluminação.
+
+Vale registrar que uma primeira avaliação concluiu o contrário, com peso de
++0,199 e desvio de 0,558, e que ela estava certa sobre o conjunto que tinha em
+mãos e errada sobre o fenômeno. Naquele momento a interferência do gerador era
+uma senoide escrita à mão numa duplicata do módulo de movimento; com a física
+correta, de reflexo especular acionado por pose, a característica passa a
+discriminar. Característica se avalia contra o fenômeno, não contra o gerador.
+
+A limitação que permanece é de observabilidade: o espectro chega recortado na
+banda cardíaca, então acima de 120 bpm o primeiro harmônico cai fora da faixa
+disponível. Medir o harmônico num espectro mais largo que o da banda ampliaria o
+alcance da característica, e isso continua pendente.
 
 ## Referências
 

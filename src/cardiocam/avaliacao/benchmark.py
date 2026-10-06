@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from cardiocam.dominio.config import ConfiguracaoAnalise
+from cardiocam.fontes.movimento import CROMATICIDADE_ESPECULAR, ParametrosMovimento
 from cardiocam.fontes.sintetica import (
     FonteSintetica,
     ParametrosSimulacao,
@@ -191,21 +192,23 @@ TONS_DE_PELE: dict[str, tuple[int, int, int]] = {
 }
 
 
-def iluminante_desviado(desvio: float) -> tuple[int, int, int]:
-    """Iluminante entre o branco e um verde saturado, em BGR.
+def iluminante_desviado(desvio: float) -> tuple[float, float, float]:
+    """Cromaticidade do iluminante, do neutro ao extremo, em BGR normalizado.
 
-    `desvio` zero é luz branca; um é o extremo. O eixo escolhido é o verde
-    porque é o canal em que a hemoglobina mais absorve, e portanto o que mais
-    confunde um método que lê pulso a partir da cor.
+    `desvio` zero é a luz de escritório que `movimento.CROMATICIDADE_ESPECULAR`
+    descreve; um é o extremo verde. O eixo escolhido é o verde porque é o canal
+    em que a hemoglobina mais absorve, e portanto o que mais confunde um método
+    que lê pulso a partir da cor.
 
-    Serve para varrer o afastamento da hipótese em que CHROM e POS se apoiam,
-    em vez de testar só "branco" contra "muito colorido".
+    Serve para varrer o afastamento da hipótese em que CHROM e POS se apoiam, em
+    vez de testar só "neutro" contra "muito colorido".
     """
     if not 0.0 <= desvio <= 1.0:
         raise ValueError("O desvio do iluminante precisa estar entre 0 e 1.")
-    extremo = (90, 255, 90)
+    extremo = (0.35, 1.00, 0.35)
     return tuple(
-        int(round(255 * (1.0 - desvio) + canal * desvio)) for canal in extremo
+        float(neutro * (1.0 - desvio) + alvo * desvio)
+        for neutro, alvo in zip(CROMATICIDADE_ESPECULAR, extremo, strict=True)
     )
 
 
@@ -220,17 +223,14 @@ def cenarios_de_robustez(
     interferência. Um modelo de qualidade treinado só ali aprenderia a
     identificar qual algoritmo rodou, e não se a janela presta.
 
-    As condições daqui vêm das três hipóteses do projeto.
+    A física vem de `fontes/movimento.py`, que modela os quatro mecanismos com
+    ruído de banda larga em vez de senoide. As condições daqui são as três
+    primeiras hipóteses do projeto.
 
     **Especular (H1).** A reflexão de superfície tem a cor do iluminante e não a
-    da pele, então ela move a direção cromática em que CHROM e POS se apoiam.
-    Entra como parcela e com escala igual nos três canais: a primeira versão
-    escalava pelo canal e o efeito media zero, porque multiplicar pela cor da
-    pele devolve uma variação de brilho disfarçada, que os dois já cancelam.
-
-    A varredura de `desvio` é o experimento, e não um detalhe de parametrização.
-    Com luz branca, CHROM e POS **cancelam o especular como foram projetados
-    para cancelar**, e o erro fica em centésimos de bpm. O que mede a hipótese é
+    da pele, e por isso move a direção cromática em que CHROM e POS se apoiam. A
+    varredura de `desvio` é o experimento: com luz neutra os dois **cancelam o
+    especular como foram projetados para cancelar**, e o que mede a hipótese é
     onde essa proteção acaba.
 
     **Câmera em movimento (H2).** O fundo deixa de ser referência válida de
@@ -247,40 +247,54 @@ def cenarios_de_robustez(
     cenarios: list[Cenario] = []
     for bpm in bpms:
         base = dict(bpm=bpm, duracao_s=20.0, fps=30.0, semente=int(bpm))
-        # A frequência do especular fica fixa em 0,9 Hz, dentro da banda
-        # cardíaca, de propósito: fora da banda o passa-faixa resolveria e o
-        # cenário não mediria nada.
-        especular = dict(amplitude_especular=0.12, movimento_hz=0.9, com_fundo=True)
+
+        def com_especular(desvio: float) -> ParametrosMovimento:
+            # Banda ESTREITA em torno de 0,9 Hz, que é movimento rítmico:
+            # alguém balançando a cabeça, caminhando ou numa esteira. A escolha
+            # é o que separa os dois regimes, e os dois foram medidos.
+            #
+            # Movimento de banda larga derruba a relação sinal-ruído e o
+            # sistema **recusa**, que é a falha benigna. Movimento rítmico cria
+            # um pico concorrente limpo dentro da banda cardíaca, e aí o método
+            # trava nele e responde com confiança um número errado. É a falha
+            # perigosa, e é a que um estudo de abstenção precisa ter.
+            return ParametrosMovimento(
+                amplitude_px=12.0,
+                banda_hz=(0.88, 0.92),
+                especular_por_pose=0.5,
+                cromaticidade_iluminante=iluminante_desviado(desvio),
+            )
+
         cenarios.extend(
             [
                 Cenario(
-                    "especular sob luz branca",
+                    "especular sob luz neutra",
                     ParametrosSimulacao(
                         **base,
                         amplitude_pulso=0.02,
                         ruido_sensor=2.0,
-                        cor_iluminante=iluminante_desviado(0.0),
-                        **especular,
+                        movimento=com_especular(0.0),
+                        com_fundo=True,
                     ),
                 ),
                 Cenario(
-                    "especular com luz desviada 0,4",
+                    "especular com luz desviada 0,5",
                     ParametrosSimulacao(
                         **base,
                         amplitude_pulso=0.02,
                         ruido_sensor=2.0,
-                        cor_iluminante=iluminante_desviado(0.4),
-                        **especular,
+                        movimento=com_especular(0.5),
+                        com_fundo=True,
                     ),
                 ),
                 Cenario(
-                    "especular com luz desviada 0,6",
+                    "especular com luz desviada 0,75",
                     ParametrosSimulacao(
                         **base,
                         amplitude_pulso=0.02,
                         ruido_sensor=2.0,
-                        cor_iluminante=iluminante_desviado(0.6),
-                        **especular,
+                        movimento=com_especular(0.75),
+                        com_fundo=True,
                     ),
                 ),
                 Cenario(
@@ -289,8 +303,19 @@ def cenarios_de_robustez(
                         **base,
                         amplitude_pulso=0.02,
                         ruido_sensor=2.0,
-                        cor_iluminante=iluminante_desviado(1.0),
-                        **especular,
+                        movimento=com_especular(1.0),
+                        com_fundo=True,
+                    ),
+                ),
+                Cenario(
+                    "tremor de luz na banda",
+                    ParametrosSimulacao(
+                        **base,
+                        amplitude_pulso=0.012,
+                        ruido_sensor=3.0,
+                        amplitude_tremor=0.05,
+                        tremor_iluminacao_hz=0.9,
+                        com_fundo=True,
                     ),
                 ),
                 Cenario(
@@ -299,8 +324,9 @@ def cenarios_de_robustez(
                         **base,
                         amplitude_pulso=0.012,
                         ruido_sensor=3.0,
-                        movimento_camera_px=18.0,
-                        movimento_camera_hz=0.35,
+                        movimento=ParametrosMovimento(
+                            camera_px=18.0, camera_banda_hz=(0.5, 3.0)
+                        ),
                         amplitude_tremor=0.02,
                         com_fundo=True,
                     ),
@@ -322,8 +348,8 @@ def cenarios_de_robustez(
                         amplitude_pulso=0.006,
                         ruido_sensor=4.0,
                         tom_pele=TONS_DE_PELE["escuro"],
-                        cor_iluminante=iluminante_desviado(0.6),
-                        **especular,
+                        movimento=com_especular(0.75),
+                        com_fundo=True,
                     ),
                 ),
             ]
