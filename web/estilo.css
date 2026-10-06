@@ -544,3 +544,18 @@ html, body {
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
+
+/*
+  Botão de diagnóstico: discreto de propósito.
+
+  Ele não faz parte do fluxo de medir e só é procurado quando algo deu errado.
+  Ter o mesmo peso visual do "Iniciar medição" competiria com a ação principal
+  justamente de quem está usando a página pela primeira vez.
+*/
+.botao-discreto {
+  background: transparent;
+  border-color: var(--linha);
+  color: var(--texto-fraco);
+  font-size: 12px;
+}
+.botao-discreto:hover:not(:disabled) { color: var(--texto); }

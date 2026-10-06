@@ -455,7 +455,7 @@ src/cardiocam/
   avaliacao/    benchmark comparativo
 web/
   js/           porte do processamento para o navegador
-  testes/       373 casos rodando em Node, sem navegador
+  testes/       502 casos em Node, mais três que dirigem um Chromium
 ```
 
 As dependências apontam sempre para dentro: `dominio` não importa nada do
@@ -468,6 +468,9 @@ da lógica.
 - [Relatório técnico](docs/RELATORIO.md): fundamentação teórica, metodologia e
   discussão dos resultados
 - [Decisões de arquitetura](docs/adr/): o porquê das escolhas que não são óbvias
+- [ADR 6](docs/adr/0006-exposicao-contra-taxa-de-quadros.md): a disputa entre
+  exposição e taxa de quadros, e como três correções seguidas erraram o alvo por
+  terem sido feitas sem medir a câmera
 
 ## Licença
 
