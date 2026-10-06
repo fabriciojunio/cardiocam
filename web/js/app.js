@@ -977,12 +977,74 @@ function pararCamera() {
    impressão de que existe um ajuste capaz de salvar a medição. */
 
 
-function laco() {
+/*
+  Um quadro da camera por vez, e com o tempo do quadro.
+
+  Este laco usava `requestAnimationFrame`, que dispara na taxa do MONITOR e nao
+  na da camera. Com tela de 60 Hz e camera entregando 20 ou 30, o mesmo quadro
+  era lido duas ou tres vezes, e cada copia entrava na serie com um carimbo de
+  tempo diferente.
+
+  O estrago nao e obvio e e grande. As copias carregam o MESMO ruido de sensor,
+  entao a serie tem menos amostras independentes do que o codigo supoe, e a
+  promediacao deixa de reduzir o ruido na proporcao esperada. Pior: a camera e
+  a tela nao sao sincronas, o numero de repeticoes varia ao longo do tempo, e
+  essa variacao injeta uma modulacao lenta que cai perto da banda cardiaca.
+
+  Era o que fazia a medicao ser descartada "independente da luz": mais luz nao
+  conserta amostra duplicada.
+
+  `requestVideoFrameCallback` resolve as duas coisas de uma vez. Ele dispara
+  exatamente uma vez por quadro NOVO e entrega `mediaTime`, que e o instante de
+  apresentacao daquele quadro, bem mais fiel que o `performance.now()` lido
+  quando o laco por acaso rodou.
+
+  O caminho de `requestAnimationFrame` continua existindo para navegador que
+  nao tem a API, e la a defesa e comparar `currentTime`: quadro repetido tem o
+  mesmo valor e e descartado em vez de entrar duplicado.
+*/
+let ultimoTempoDeQuadro = -1;
+
+function suportaCallbackDeQuadro() {
+  return typeof el.video?.requestVideoFrameCallback === 'function';
+}
+
+function agendarProximoQuadro() {
   if (!rodando) return;
-  animacao = requestAnimationFrame(laco);
+  if (suportaCallbackDeQuadro()) {
+    animacao = el.video.requestVideoFrameCallback((_agora, metadados) => {
+      laco(metadados);
+    });
+    return;
+  }
+  animacao = requestAnimationFrame(() => laco(null));
+}
+
+function cancelarProximoQuadro() {
+  if (animacao === null) return;
+  if (suportaCallbackDeQuadro() && el.video?.cancelVideoFrameCallback) {
+    el.video.cancelVideoFrameCallback(animacao);
+  } else {
+    cancelAnimationFrame(animacao);
+  }
+  animacao = null;
+}
+
+function laco(metadados) {
+  if (!rodando) return;
+  agendarProximoQuadro();
 
   const video = el.video;
   if (!video.videoWidth) return;
+
+  // Sem a API de quadro, descarta repeticao comparando o tempo de midia. Um
+  // quadro ja processado tem exatamente o mesmo `currentTime`, e deixa-lo
+  // entrar de novo e o defeito que esta funcao existe para impedir.
+  if (metadados === null) {
+    const tempoDoQuadro = video.currentTime;
+    if (tempoDoQuadro === ultimoTempoDeQuadro) return;
+    ultimoTempoDeQuadro = tempoDoQuadro;
+  }
 
   const largura = 320;
   const altura = Math.round((video.videoHeight / video.videoWidth) * largura) || 240;
@@ -1031,7 +1093,13 @@ function laco() {
   // amostra suficiente, e só então decide.
   void descerDegrauSeNecessario();
 
-  const agora = performance.now() / 1000;
+  // O instante do QUADRO, quando o navegador o fornece. `mediaTime` e o tempo
+  // de apresentacao daquele quadro na linha do tempo da midia, e e o carimbo
+  // correto para reamostrar: `performance.now()` mede quando o laco rodou, que
+  // e outra coisa e carrega o jitter do laco junto.
+  const agora = metadados && Number.isFinite(metadados.mediaTime)
+    ? metadados.mediaTime
+    : performance.now() / 1000;
   const estado = rastreamentoLigado && regioesAtuais
     ? medidor.processarQuadro(ctx, largura, altura, agora, regioesAtuais, caixaDoRosto)
     : medidor.processarQuadro(ctx, largura, altura, agora);
@@ -1207,6 +1275,7 @@ async function comecar() {
     el.palco.classList.toggle('tela', fonte === 'tela');
     rodando = true;
     ultimaAnalise = 0;
+    ultimoTempoDeQuadro = -1;
 
     if (fonte === 'tela') {
       const qualidade = avaliarCaptura(fluxo, null);
@@ -1240,7 +1309,7 @@ async function comecar() {
     }
     quadrosParaAvaliarDesempenho = 0;
     jaAvaliouDesempenho = false;
-    laco();
+    laco(null);
   } catch (erro) {
     pararCamera();
     if (cancelado) {
@@ -1327,7 +1396,8 @@ function mensagemDeErroDeCamera(erro) {
 function parar() {
   cancelado = true;
   rodando = false;
-  if (animacao) cancelAnimationFrame(animacao);
+  cancelarProximoQuadro();
+  ultimoTempoDeQuadro = -1;
   pararCamera();
   el.palcoVazio.hidden = false;
   el.btnParar.disabled = true;
