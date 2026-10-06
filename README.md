@@ -274,10 +274,7 @@ Essa é a segunda metade do sistema, e ela tem autoridade para calar a resposta.
 
 A primeira metade estima a frequência. O problema é que ela **sempre** devolve um
 número: quando a janela é ruim, o número errado tem exatamente a mesma aparência
-do certo, e quem lê não tem como distinguir. Três testes já cobravam os casos
-extremos, parede lisa, imagem saturada e vídeo curto. O caso que machuca é o do
-meio, em que há sinal, o espectro tem pico, e a estimativa está a quarenta
-batimentos da verdade.
+do certo, e quem lê não tem como distinguir.
 
 ```bash
 cardiocam qualidade --saida docs/abstencao.md
@@ -296,61 +293,70 @@ Bayesiana por um motivo que decide o projeto. Um classificador comum devolve um
 número e não separa dois casos muito diferentes: "vi muitas janelas assim e 70%
 acertaram" e "nunca vi nada parecido, meu chute é 70%". Num sistema que vai
 **recusar medir** com base nesse número, confundir os dois deixa a recusa
-arbitrária justamente onde o modelo não tem experiência, que é onde ela mais
-importa. A posteriori sobre os pesos separa os dois, e a probabilidade
-marginalizada é puxada para 0,5 longe do que foi visto.
+arbitrária justamente onde o modelo não tem experiência.
 
-Há um segundo motivo, prático: a priori própria impede a divergência clássica da
-logística com dado linearmente separável, e **esse caso acontece aqui**, porque
-cenário sintético fácil produz janelas em que toda estimativa acerta.
+### O resultado, e ele tem dois lados
 
-### O número
+A medição que importa não é "quanto o erro cai". É **quanto ele cai conforme o
+que se pede ao modelo**, e aqui a resposta depende do que o teste considera
+inédito:
 
-Sobre 335 janelas, com a partição feita **por condição**, de modo que o teste
-mede acerto numa perturbação nunca vista:
-
-| | Erro médio | Cobertura |
+| Partição | Respondendo sempre | Melhor com abstenção |
 | --- | ---: | ---: |
-| Respondendo sempre | 10,51 bpm | 100% |
-| Com abstenção | **6,01 bpm** | 87,5% |
+| Por **frequência** (artefato conhecido, bpm novo) | 8,16 bpm | **0,01 bpm** a 40,7% |
+| Por **condição** (artefato nunca visto) | 10,52 bpm | 8,01 bpm a 16,4% |
 
-Erro 43% menor recusando 12,5% das janelas. A curva inteira sai no relatório,
-porque erro sem cobertura ao lado não quer dizer nada.
+Lado positivo: quando o tipo de artefato está representado no treino, o modelo
+separa janela boa de ruim quase perfeitamente. No ponto de operação adotado, o
+erro cai de 8,16 para 5,39 bpm recusando metade das janelas.
 
-### O que o modelo aprendeu sozinho
+Lado negativo, e é o que vale saber: **o modelo não generaliza para um artefato
+que nunca viu**. Mantendo cobertura razoável, o ganho some.
 
-Os pesos são legíveis, e dois deles contam a mesma história:
+A conclusão prática é direta e não é confortável: um modelo de qualidade precisa
+ser treinado nos artefatos que vão ocorrer, e o modo de falha dele é o artefato
+inédito. Afirmar o contrário exigiria uma evidência que esta medição não dá.
+
+### Por que o artefato inédito escapa
+
+Porque o pior deles produz um espectro **excelente**.
+
+A bateria de robustez separa dois regimes de movimento, e os dois foram medidos:
+
+- **movimento de banda larga** espalha energia, derruba a relação sinal-ruído, e
+  o sistema **recusa** pelo portão que já existia. É a falha benigna;
+- **movimento rítmico**, de banda estreita dentro da faixa cardíaca, cria um pico
+  concorrente limpo. O método trava nele e responde com confiança um número
+  errado em trinta batimentos. Relação sinal-ruído alta, pico proeminente,
+  frequência estável entre subjanelas: toda característica diz "boa janela".
+
+### A característica que mais pesa
 
 | Característica | Peso | Desvio |
 | --- | ---: | ---: |
-| `snr_db` | +4,94 | 0,90 |
-| `entropia_espectral` | +3,18 | 0,94 |
-| `dispersao_do_pico_bpm` | +2,48 | 1,61 |
-| `proeminencia` | −1,38 | 0,53 |
-| `correlacao_com_fundo` | −1,18 | 0,28 |
+| `razao_harmonica` | +4,56 | 0,88 |
+| `jitter_temporal` | +0,93 | 0,74 |
+| `snr_db` | +0,93 | 0,38 |
+| `proeminencia` | −0,94 | 0,32 |
+| `correlacao_com_fundo` | −0,48 | 0,19 |
 
-Entropia com peso **positivo** e proeminência com peso **negativo** dizem que,
-dado o SNR, espectro limpo demais indica resposta errada. É exatamente o que a
-seção anterior afirma sobre o ICA, "uma interferência senoidal forte é mais limpa
-que um pulso real", agora saindo do dado sem ninguém ter contado ao modelo.
+A razão harmônica domina, e a física explica: o pulso sobe rápido e desce
+devagar, então deposita energia em 2f; uma oscilação de iluminação é senoidal e
+não deposita. É exatamente a ideia que o relatório da disciplina tinha listado
+como trabalho futuro para corrigir o critério de seleção do ICA, agora medida.
 
-Quatro características não variam no caminho analítico, por não haver imagem:
-fração de pele, fração saturada, deslocamento da região e jitter. Os pesos delas
-ficam em zero com o desvio da priori, que é a resposta certa, "não observei", em
-vez de um número que depois seria lido como informação.
+Quatro características ficam com peso zero e o desvio da priori, porque não
+variam no caminho analítico, que não tem imagem: fração de pele, fração
+saturada, deslocamento da região e saturação. Isso é a resposta certa, "não
+observei", em vez de um número que seria lido como informação.
 
-### O que ele não resolve
+### O limite da calibração
 
-Quando a interferência é cromaticamente alinhada com o pulso, nenhuma
-característica de janela a distingue, e o erro no teste tem piso. Isso está
-medido, não suposto: varrendo o desvio cromático do iluminante, POS quebra em 0,4
-e CHROM em 0,6, os dois saltando de 0,05 para 34,5 bpm. É um limite de validade
-da hipótese de tom de pele fixo, e não deficiência de ajuste.
-
-A calibração também tem limite. O ECE fica em 0,165 depois da correção por
-temperatura, e a descalibração que sobra está nas faixas do meio, onde a partição
-de calibração tem poucas janelas. Está no diagrama de confiabilidade do
-relatório, com a contagem de cada faixa.
+O ECE fica em 0,26 depois da correção por temperatura, ajustada fora da amostra.
+A descalibração que sobra está nas faixas do meio, onde a partição de calibração
+tem poucas janelas. Está no diagrama de confiabilidade do relatório, com a
+contagem de cada faixa, e não vale esconder: um limiar escolhido sobre
+probabilidade descalibrada significa menos do que promete.
 
 O raciocínio inteiro, com as alternativas descartadas, está na
 [ADR 5](docs/adr/0005-abstencao-com-incerteza-calibrada.md).
@@ -363,7 +369,7 @@ pytest -m "not lento"          # pula os testes de vídeo
 pytest --cov=cardiocam         # com cobertura
 ```
 
-São 2.176 casos em Python e 373 no navegador, e nenhum usa simulacro no lugar do
+São 2.198 casos em Python e 373 no navegador, e nenhum usa simulacro no lugar do
 código real. A estratégia é a mesma em todos os níveis: gerar um sinal cuja
 frequência verdadeira nós escolhemos, rodar o sistema de verdade e conferir o
 que sai.
@@ -372,13 +378,13 @@ que sai.
 cd web && npm test     # os 373 casos da versão web, em Node
 ```
 
-- **Unidade** (1.478 casos): resposta em frequência do filtro medida em dezenas
+- **Unidade** (1.499 casos): resposta em frequência do filtro medida em dezenas
   de frequências, recuperação de senoides varrendo a banda de 45 a 220 bpm em
   passos de 2,5 bpm, remoção de tendência, rectificação por referência de fundo,
   detecção de picos, geometria, segmentação de pele em oito tons diferentes, e o
   modelo de qualidade: recuperação de pesos conhecidos, encolhimento da
   probabilidade longe do treino e aferição de calibração.
-- **Integração** (600 casos): os quatro algoritmos sobre séries RGB modeladas
+- **Integração** (601 casos): os quatro algoritmos sobre séries RGB modeladas
   fisicamente, variando tom de pele, taxa de quadros, amplitude do pulso, ruído
   e interferência; mais pipeline, fontes, interface, linha de comando e o treino
   da abstenção de ponta a ponta sobre a bateria inteira.

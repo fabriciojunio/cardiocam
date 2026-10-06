@@ -199,7 +199,13 @@ class TestCaminhoCompleto:
     @pytest.fixture(scope="class")
     @classmethod
     def treinado(cls):
-        amostras, falhas = coletar(cenarios_padrao() + cenarios_de_robustez())
+        # Agrupamento por frequência: os tipos de artefato aparecem no treino e
+        # o teste varia a frequência cardíaca. É o cenário em que a abstenção
+        # tem o que fazer, e o contraste com o agrupamento por condição é o
+        # resultado central do módulo.
+        amostras, falhas = coletar(
+            cenarios_padrao() + cenarios_de_robustez(), agrupar_por="frequencia"
+        )
         return treinar(amostras, cobertura_minima=0.4, erro_alvo_bpm=2.0), falhas
 
     def test_a_coleta_produz_uma_amostra_por_janela_bem_sucedida(self, treinado):
@@ -209,8 +215,8 @@ class TestCaminhoCompleto:
             + relatorio.quantidade_calibracao
             + relatorio.quantidade_teste
         )
-        # 56 cenários padrão mais 28 de robustez, vezes quatro algoritmos.
-        assert total + falhas == (56 + 28) * 4
+        esperado = (len(cenarios_padrao()) + len(cenarios_de_robustez())) * 4
+        assert total + falhas == esperado
 
     def test_a_bateria_tem_erro_para_a_abstencao_atacar(self, treinado):
         """Controle do próprio experimento.
@@ -223,23 +229,63 @@ class TestCaminhoCompleto:
         relatorio, _ = treinado
         assert relatorio.curva_no_teste.erro_sem_abstencao > 1.0
 
-    def test_recusar_reduz_o_erro(self, treinado):
+    def test_nao_generaliza_para_artefato_nunca_visto(self):
+        """O resultado central de H4, e ele é negativo. Vale ser cobrado.
+
+        Com a partição por condição, o teste cai sobre um tipo de perturbação
+        que o modelo nunca viu, e a abstenção quase não ajuda: o ganho exige
+        recusar a maior parte das janelas. É o comportamento esperado e é um
+        achado, não um defeito, então o teste existe para avisar se ele mudar.
+
+        A razão é física. O artefato que sobra é a trava num pico rítmico
+        limpo dentro da banda cardíaca, e ele produz um espectro de janela
+        **excelente**: relação sinal-ruído alta, pico proeminente, frequência
+        estável entre subjanelas. Toda característica diz "boa janela".
+        """
+        amostras, _ = coletar(
+            cenarios_padrao() + cenarios_de_robustez(), agrupar_por="condicao"
+        )
+        relatorio = treinar(amostras, cobertura_minima=0.4, erro_alvo_bpm=2.0)
+        util = [
+            p
+            for p in relatorio.curva_no_teste.pontos
+            if p.quantidade > 0 and p.cobertura >= 0.4
+        ]
+        melhor = min(util, key=lambda p: p.erro_medio)
+        # Mantendo cobertura razoável, o ganho é desprezível.
+        assert melhor.erro_medio > relatorio.curva_no_teste.erro_sem_abstencao * 0.8
+
+    def test_generaliza_para_frequencia_nunca_vista(self, treinado):
+        """O outro lado do mesmo achado, e este é positivo.
+
+        Quando os tipos de artefato estão representados no treino e só a
+        frequência cardíaca é nova, a abstenção funciona. A conclusão prática é
+        direta: o modelo de qualidade precisa ser treinado nos artefatos que
+        vão ocorrer, e o modo de falha dele é o artefato inédito.
+        """
         relatorio, _ = treinado
         melhor = min(
             (p for p in relatorio.curva_no_teste.pontos if p.quantidade > 0),
             key=lambda p: p.erro_medio,
         )
-        assert melhor.erro_medio < relatorio.curva_no_teste.erro_sem_abstencao * 0.8
+        assert melhor.erro_medio < relatorio.curva_no_teste.erro_sem_abstencao * 0.5
 
-    def test_as_caracteristicas_de_sinal_sustentam_os_proprios_pesos(self, treinado):
-        """Ao menos a relação sinal-ruído precisa ter peso acima do seu desvio.
+    def test_a_razao_harmonica_sustenta_o_proprio_peso(self, treinado):
+        """A característica que separa pulso de senoide, e que vira dominante.
 
-        Se nem ela sustentar, o modelo não aprendeu nada e a redução de erro
-        observada seria coincidência da partição.
+        Pulso real tem energia em 2f, porque a onda sobe rápido e desce
+        devagar; interferência senoidal de iluminação não tem. É exatamente a
+        ideia que o relatório da disciplina listou como trabalho futuro para o
+        critério do ICA, e aqui ela aparece medida.
+
+        Se este peso deixar de se sustentar, o ganho observado deixa de ter
+        explicação física e vira coincidência da partição.
         """
         relatorio, _ = treinado
         regressao = relatorio.modelo.regressao
-        assert abs(regressao.pesos["snr_db"]) > regressao.desvios_dos_pesos["snr_db"]
+        assert abs(regressao.pesos["razao_harmonica"]) > regressao.desvios_dos_pesos[
+            "razao_harmonica"
+        ]
 
     def test_caracteristica_sem_variacao_fica_com_a_priori(self, treinado):
         """O modelo precisa dizer "não sei" sobre o que não observou.

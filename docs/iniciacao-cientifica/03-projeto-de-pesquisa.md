@@ -111,20 +111,29 @@ como trabalho anterior:
 | H1 | construído | **sim**, e com resultado: há um limiar de validade |
 | H2 | construído | pendente |
 | H3 | construído | pendente |
-| H4 | construído | **sim**: erro cai de 10,51 para 6,01 bpm a 87,5% de cobertura |
+| H4 | construído | **sim**, e o resultado é parcialmente negativo |
 
-O resultado de H1 merece destaque porque restringe a própria hipótese. Sob luz
-branca, CHROM e POS **cancelam a componente especular como foram projetados para
-cancelar**, e o erro fica em centésimos de bpm. A degradação aparece quando a
-cromaticidade do iluminante se afasta do branco: medindo, o POS colapsa em desvio
-0,4 e o CHROM em 0,6.
+**H1 saiu mais estreita do que entrou.** Sob luz neutra, CHROM e POS cancelam a
+componente especular como foram projetados para cancelar, e o erro fica em
+centésimos de bpm. A degradação aparece quando a cromaticidade do iluminante se
+afasta: medindo, o CHROM quebra em desvio 0,75 e o POS em 1,0, nessa ordem, que
+é a que a literatura prevê. O VERDE erra em todos os pontos, por não ter proteção
+cromática nenhuma.
 
-Isso muda a formulação de H1 para a camada de dado real: a pergunta deixa de ser
-"o especular degrada?" e passa a ser **"a iluminação real de uma sala se afasta o
-bastante do branco para cruzar esse limiar?"**. É uma pergunta mais estreita,
-mais fácil de responder e mais útil, e só apareceu porque a camada sintética
-permite varrer uma coisa de cada vez. Detalhe e tabela em
-`05-resultados-preliminares.md`, seção 5.2.
+A pergunta para a camada de dado real passa a ser **"a iluminação de uma sala se
+afasta o bastante do neutro para cruzar esse limiar?"**, que é mais estreita e
+mais fácil de responder.
+
+**H4 recebeu uma ressalva que muda o que se pode prometer.** A abstenção funciona
+quando o tipo de artefato está representado no treino, e **não generaliza para um
+artefato inédito**. O motivo é físico: o pior artefato, que é a trava num pico
+rítmico dentro da banda cardíaca, produz um espectro excelente, e toda
+característica de janela diz "boa janela".
+
+A consequência para o desenho da IC é concreta: a camada 3 precisa cobrir os
+tipos de artefato que se quer detectar, e o relatório final precisa declarar
+quais ficaram de fora. Tabelas e método em `05-resultados-preliminares.md`,
+seções 5.2 a 5.6.
 
 ### 1.4 Contribuição esperada
 

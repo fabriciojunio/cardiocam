@@ -120,6 +120,15 @@ class ParametrosMovimento:
     constante_do_ganho_s: float = 0.6
     """Constante de tempo da resposta do ganho automático."""
 
+    cromaticidade_iluminante: tuple[float, float, float] = CROMATICIDADE_ESPECULAR
+    """Cor da luz que produz o reflexo especular, em BGR normalizado.
+
+    Deixou de ser constante do módulo porque é o eixo do experimento de H1. Sob
+    luz branca, CHROM e POS cancelam o termo especular exatamente como foram
+    projetados para cancelar, e varrer o afastamento dessa cromaticidade é o que
+    mede onde a proteção deles acaba. Com o valor fixo não havia o que varrer.
+    """
+
     @property
     def ativo(self) -> bool:
         """Verdadeiro quando algum termo sai do padrão neutro.
@@ -284,6 +293,7 @@ def aplicar_especular(
     modulacao_bgr: np.ndarray,
     tom_pele_bgr: tuple[int, int, int],
     intensidade: float,
+    cromaticidade: tuple[float, float, float] = CROMATICIDADE_ESPECULAR,
 ) -> np.ndarray:
     """Soma o reflexo especular ao multiplicador da pele.
 
@@ -303,5 +313,5 @@ def aplicar_especular(
 
     base = np.asarray(tom_pele_bgr, dtype=float)
     base = np.where(base > 1.0, base, 1.0)
-    acrescimo = intensidade * np.asarray(CROMATICIDADE_ESPECULAR, dtype=float) / base
+    acrescimo = intensidade * np.asarray(cromaticidade, dtype=float) / base
     return np.asarray(modulacao_bgr, dtype=float) + acrescimo
