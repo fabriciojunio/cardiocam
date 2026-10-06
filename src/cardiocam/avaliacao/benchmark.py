@@ -178,6 +178,159 @@ def cenarios_padrao(
     return cenarios
 
 
+# Tons de pele em BGR, cobrindo a faixa que os conjuntos públicos de rPPG
+# cobrem mal. UBFC-rPPG e PURE foram coletados quase só com fototipos 2 e 3 de
+# Fitzpatrick, e é dessa lacuna que a hipótese H3 trata. Os valores não são
+# medidas colorimétricas: são três pontos afastados o suficiente para que a
+# diferença de intensidade refletida apareça, e estão aqui como parâmetro
+# nomeado justamente para não parecerem mais precisos do que são.
+TONS_DE_PELE: dict[str, tuple[int, int, int]] = {
+    "claro": (150, 175, 205),
+    "medio": (95, 120, 150),
+    "escuro": (45, 58, 78),
+}
+
+
+def iluminante_desviado(desvio: float) -> tuple[int, int, int]:
+    """Iluminante entre o branco e um verde saturado, em BGR.
+
+    `desvio` zero é luz branca; um é o extremo. O eixo escolhido é o verde
+    porque é o canal em que a hemoglobina mais absorve, e portanto o que mais
+    confunde um método que lê pulso a partir da cor.
+
+    Serve para varrer o afastamento da hipótese em que CHROM e POS se apoiam,
+    em vez de testar só "branco" contra "muito colorido".
+    """
+    if not 0.0 <= desvio <= 1.0:
+        raise ValueError("O desvio do iluminante precisa estar entre 0 e 1.")
+    extremo = (90, 255, 90)
+    return tuple(
+        int(round(255 * (1.0 - desvio) + canal * desvio)) for canal in extremo
+    )
+
+
+def cenarios_de_robustez(
+    bpms: tuple[float, ...] = (54.0, 72.0, 96.0, 132.0),
+) -> list[Cenario]:
+    """Bateria das condições que o projeto de iniciação científica investiga.
+
+    A bateria padrão não serve para estudar abstenção, e isso foi medido: cinco
+    das suas sete condições acertam 100% das janelas dentro de 3 bpm, e as duas
+    restantes erram exatamente 50%, que é o GREEN e o ICA falhando na
+    interferência. Um modelo de qualidade treinado só ali aprenderia a
+    identificar qual algoritmo rodou, e não se a janela presta.
+
+    As condições daqui vêm das três hipóteses do projeto.
+
+    **Especular (H1).** A reflexão de superfície tem a cor do iluminante e não a
+    da pele, então ela move a direção cromática em que CHROM e POS se apoiam.
+    Entra como parcela e com escala igual nos três canais: a primeira versão
+    escalava pelo canal e o efeito media zero, porque multiplicar pela cor da
+    pele devolve uma variação de brilho disfarçada, que os dois já cancelam.
+
+    A varredura de `desvio` é o experimento, e não um detalhe de parametrização.
+    Com luz branca, CHROM e POS **cancelam o especular como foram projetados
+    para cancelar**, e o erro fica em centésimos de bpm. O que mede a hipótese é
+    onde essa proteção acaba.
+
+    **Câmera em movimento (H2).** O fundo deixa de ser referência válida de
+    iluminação, porque o trecho enquadrado muda. Por isso estes cenários ligam
+    `com_fundo`, sem o qual a rectificação nem entra em cena.
+
+    **Tom de pele (H3).** Pele mais escura reflete menos, e com ruído de sensor
+    fixo isso é perda direta de relação sinal-ruído.
+
+    As últimas condições combinam efeitos de propósito. Hipótese testada uma de
+    cada vez diz se o efeito existe; combinada diz se as correções continuam
+    valendo com dois problemas juntos, que é o caso real.
+    """
+    cenarios: list[Cenario] = []
+    for bpm in bpms:
+        base = dict(bpm=bpm, duracao_s=20.0, fps=30.0, semente=int(bpm))
+        # A frequência do especular fica fixa em 0,9 Hz, dentro da banda
+        # cardíaca, de propósito: fora da banda o passa-faixa resolveria e o
+        # cenário não mediria nada.
+        especular = dict(amplitude_especular=0.12, movimento_hz=0.9, com_fundo=True)
+        cenarios.extend(
+            [
+                Cenario(
+                    "especular sob luz branca",
+                    ParametrosSimulacao(
+                        **base,
+                        amplitude_pulso=0.02,
+                        ruido_sensor=2.0,
+                        cor_iluminante=iluminante_desviado(0.0),
+                        **especular,
+                    ),
+                ),
+                Cenario(
+                    "especular com luz desviada 0,4",
+                    ParametrosSimulacao(
+                        **base,
+                        amplitude_pulso=0.02,
+                        ruido_sensor=2.0,
+                        cor_iluminante=iluminante_desviado(0.4),
+                        **especular,
+                    ),
+                ),
+                Cenario(
+                    "especular com luz desviada 0,6",
+                    ParametrosSimulacao(
+                        **base,
+                        amplitude_pulso=0.02,
+                        ruido_sensor=2.0,
+                        cor_iluminante=iluminante_desviado(0.6),
+                        **especular,
+                    ),
+                ),
+                Cenario(
+                    "especular com luz desviada 1,0",
+                    ParametrosSimulacao(
+                        **base,
+                        amplitude_pulso=0.02,
+                        ruido_sensor=2.0,
+                        cor_iluminante=iluminante_desviado(1.0),
+                        **especular,
+                    ),
+                ),
+                Cenario(
+                    "camera movendo",
+                    ParametrosSimulacao(
+                        **base,
+                        amplitude_pulso=0.012,
+                        ruido_sensor=3.0,
+                        movimento_camera_px=18.0,
+                        movimento_camera_hz=0.35,
+                        amplitude_tremor=0.02,
+                        com_fundo=True,
+                    ),
+                ),
+                Cenario(
+                    "pele escura com pouca luz",
+                    ParametrosSimulacao(
+                        **base,
+                        amplitude_pulso=0.004,
+                        ruido_sensor=5.0,
+                        tom_pele=TONS_DE_PELE["escuro"],
+                        com_fundo=True,
+                    ),
+                ),
+                Cenario(
+                    "pele escura com especular desviado",
+                    ParametrosSimulacao(
+                        **base,
+                        amplitude_pulso=0.006,
+                        ruido_sensor=4.0,
+                        tom_pele=TONS_DE_PELE["escuro"],
+                        cor_iluminante=iluminante_desviado(0.6),
+                        **especular,
+                    ),
+                ),
+            ]
+        )
+    return cenarios
+
+
 def avaliar(
     cenarios: list[Cenario] | None = None,
     algoritmos: tuple[str, ...] = ALGORITMOS_DISPONIVEIS,

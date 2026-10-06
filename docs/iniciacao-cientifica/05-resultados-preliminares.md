@@ -22,6 +22,7 @@ externo e sem requisição de rede no caminho de medição.
 | Pipeline | orquestração da janela deslizante até o número |
 | Fontes | webcam, arquivo de vídeo, **captura de tela** e gerador sintético |
 | Interface | linha de comando e janela gráfica com indicadores |
+| Qualidade | características da janela, modelo bayesiano de confiabilidade e abstenção com cobertura declarada |
 
 **Os quatro algoritmos foram implementados do zero**, a partir dos artigos
 originais, e não importados de biblioteca. Isso é relevante para o projeto
@@ -127,15 +128,15 @@ Dois achados aqui, e os dois entram no projeto:
 
 ## 3. Testes automatizados
 
-**2.005 casos em Python e 306 no navegador**, e nenhum usa simulacro no lugar do
+**2.176 casos em Python e 373 no navegador**, e nenhum usa simulacro no lugar do
 código real. A estratégia é a mesma em todos os níveis: gerar um sinal cuja
 frequência verdadeira foi escolhida por nós, rodar o sistema de verdade e
 conferir o que sai.
 
 | Nível | Casos | O que exercita |
 | --- | ---: | --- |
-| Unidade | 1.355 | resposta em frequência do filtro medida em dezenas de frequências; recuperação de senoides varrendo 45 a 220 bpm em passos de 2,5 bpm; remoção de tendência; rectificação; detecção de picos; geometria; **segmentação de pele em oito tons diferentes** |
-| Integração | 552 | os quatro algoritmos sobre séries modeladas fisicamente, variando tom de pele, taxa de quadros, amplitude, ruído e interferência; pipeline, fontes, interface, linha de comando e ajustes de câmera |
+| Unidade | 1.478 | resposta em frequência do filtro medida em dezenas de frequências; recuperação de senoides varrendo 45 a 220 bpm em passos de 2,5 bpm; remoção de tendência; rectificação; detecção de picos; geometria; **segmentação de pele em oito tons diferentes** |
+| Integração | 600 | os quatro algoritmos sobre séries modeladas fisicamente, variando tom de pele, taxa de quadros, amplitude, ruído e interferência; pipeline, fontes, interface, linha de comando e ajustes de câmera |
 | Ponta a ponta | 98 | vídeo renderizado quadro a quadro, cascata de Haar procurando o rosto de fato, até o número final |
 
 Cobertura de 87%. O que fica fora é quase todo o código que só executa com
@@ -203,19 +204,137 @@ havia como construir um que falhasse. O simulador estava otimista, não errado.
 do projeto, todos com padrão neutro para que os números já publicados continuem
 valendo bit a bit.
 
-## 5. O que isso significa para a IC
+## 5. A abstenção com incerteza calibrada, e o que ela já mede
+
+Esta seção corresponde à hipótese H4, e ela deixou de ser só hipótese: o
+instrumento está construído e rodou.
+
+### 5.1 Por que a bateria antiga não servia para isso
+
+Primeira medição, e ela reprovou o próprio plano. Sobre os 56 cenários da seção
+2.1, **cinco das sete condições acertam 100% das janelas dentro de 3 bpm**, e as
+duas restantes erram exatamente 50%, que é o GREEN e o ICA falhando na
+interferência enquanto CHROM e POS acertam.
+
+Um modelo de confiabilidade treinado ali aprenderia a identificar **qual
+algoritmo rodou**, e não se a janela presta. O erro não varia de forma contínua,
+então não há o que ordenar.
+
+A conclusão foi construir a bateria de robustez, que é o instrumento das três
+primeiras hipóteses. Ela entra no gerador como componente especular, movimento de
+câmera com fundo gerado, e tons de pele.
+
+### 5.2 O achado sobre H1: existe um limiar de validade, e ele foi medido
+
+A componente especular soma na cor do **iluminante**, e não na da pele. É isso
+que move a direção cromática em que CHROM e POS se apoiam.
+
+A primeira implementação escalava o termo pelo canal, e o efeito mediu zero:
+multiplicar pela cor da pele devolve um termo proporcional a ela, que é uma
+variação de brilho disfarçada, e os dois métodos cancelam isso por construção. A
+correção foi escalar pela intensidade média, igual nos três canais. A luz que
+quica na superfície não sabe de que cor é a pele, e é essa independência que
+produz o efeito.
+
+Com a física correta, varrendo o afastamento do iluminante em relação ao branco:
+
+| Desvio do iluminante | VERDE | CHROM | POS | ICA |
+| --- | ---: | ---: | ---: | ---: |
+| 0,0 (branco) | 34,51 | 0,04 | 0,12 | 34,51 |
+| 0,2 | 34,51 | 0,04 | 0,06 | 34,51 |
+| 0,4 | 34,51 | 0,05 | **34,55** | 34,51 |
+| 0,6 | 34,51 | **34,53** | 34,53 | 34,51 |
+| 1,0 | 34,51 | 34,52 | 34,51 | 34,54 |
+
+Erro absoluto médio em bpm, quatro frequências por linha, especular a 0,9 Hz,
+dentro da banda cardíaca.
+
+**A leitura.** Sob luz branca, CHROM e POS cancelam o especular exatamente como
+foram projetados para cancelar, e o erro fica em centésimos de bpm. A proteção
+não é infinita: o POS colapsa em desvio 0,4 e o CHROM em 0,6, os dois saltando
+para 34,5 bpm, que é a distância média até a frequência da interferência.
+
+Isso é um **limiar de validade da hipótese de tom de pele fixo**, medido em vez
+de afirmado, e é a contribuição mais concreta que a camada sintética produziu até
+aqui. Em dado real as duas coisas vêm misturadas e não há como varrer uma
+mantendo a outra, que é precisamente o motivo de a camada 1 existir.
+
+### 5.3 O que a abstenção entrega
+
+Modelo: regressão logística bayesiana por aproximação de Laplace, características
+da janela que não dependem da resposta certa, três partições, e a partição feita
+**por condição**, de modo que o teste mede acerto numa perturbação nunca vista.
+
+Sobre 335 janelas, com uma recusada pelo próprio pipeline:
+
+| | Erro médio | Cobertura |
+| --- | ---: | ---: |
+| Respondendo sempre | 10,51 bpm | 100% |
+| Com abstenção | **6,01 bpm** | 87,5% |
+
+Erro 43% menor recusando 12,5% das janelas.
+
+### 5.4 O modelo redescobriu um defeito que o projeto já conhecia
+
+Os pesos são legíveis, e dois contam a mesma história:
+
+| Característica | Peso | Desvio | Sustentado |
+| --- | ---: | ---: | :---: |
+| `snr_db` | +4,94 | 0,90 | sim |
+| `entropia_espectral` | +3,18 | 0,94 | sim |
+| `dispersao_do_pico_bpm` | +2,48 | 1,61 | sim |
+| `proeminencia` | −1,38 | 0,53 | sim |
+| `correlacao_com_fundo` | −1,18 | 0,28 | sim |
+
+Entropia com peso **positivo** e proeminência com peso **negativo** dizem, dado o
+SNR, que espectro limpo demais indica resposta errada. É exatamente a falha do
+ICA descrita na seção 2.2, agora saindo do dado sem ninguém ter contado ao
+modelo.
+
+Quatro características ficam com peso zero e desvio igual ao da priori, porque
+não variam no caminho analítico, que não tem imagem. Isso é a resposta certa,
+"não observei", em vez de um número que seria lido como informação. Há teste
+cobrando.
+
+### 5.5 Os limites, declarados
+
+**A abstenção tem piso.** Quando a interferência é cromaticamente alinhada com o
+pulso, nenhuma característica de janela a distingue. Está medido na varredura de
+5.2 e é limite físico, não deficiência de ajuste.
+
+**A calibração ainda não está boa.** Depois da correção por temperatura, ajustada
+fora da amostra, o ECE fica em 0,165. A descalibração que sobra está nas faixas
+do meio, onde a partição de calibração tem poucas janelas. Com 14 condições e 15%
+para calibração, caem ali cerca de duas condições. Em dado real, com mais
+sujeitos, essa partição cresce.
+
+**O conjunto é sintético.** Os números acima comparam configurações entre si e
+não afirmam desempenho absoluto. O portão continua valendo: reproduzir os 3,67
+bpm da literatura em UBFC-rPPG antes de acreditar em qualquer número novo.
+
+## 6. O que isso significa para a IC
 
 O projeto não começa do zero, e também não começa de um sistema que já funciona
 perfeitamente. Começa de um sistema **medido o suficiente para saber onde ele
 falha**, o que é a posição de partida mais útil que existe:
 
 - a ferramenta está pronta e testada;
-- o gerador de cenário está pronto e estendido;
+- o gerador de cenário está pronto e estendido, agora com componente especular,
+  movimento de câmera e tons de pele;
 - as hipóteses não foram inventadas: saíram de medição;
+- **H1 e H4 já têm instrumento e primeira medida**, e H1 já produziu um
+  resultado: o limiar de validade da hipótese cromática;
 - o portão de qualidade está definido, que é reproduzir os 3,67 bpm da
   literatura antes de acreditar em qualquer número novo.
 
-## 6. Como reproduzir
+Uma ressalva que o orientador precisa ouvir antes de qualquer outra: **nada
+disso é resultado da IC**. É trabalho anterior, de disciplina, e está declarado
+como preliminar justamente para não ser confundido. O que ele muda é o ponto de
+partida: a IC começa pelo experimento e pela interpretação, e não pela
+construção da ferramenta. As perguntas das quatro hipóteses continuam abertas em
+dado real, que é onde elas de fato se respondem.
+
+## 7. Como reproduzir
 
 ```bash
 git clone <repositório>
@@ -223,7 +342,8 @@ cd cardiocam
 python -m venv .venv && .venv\Scripts\activate
 pip install -e ".[dev]"
 
-pytest -n 4                 # os 2.005 testes
+pytest -n 4                 # os 2.176 testes
 cardiocam avaliar           # os 56 cenários da seção 2.1
 cardiocam diagnosticar      # a varredura da seção 2.3
+cardiocam qualidade         # a abstenção da seção 5
 ```

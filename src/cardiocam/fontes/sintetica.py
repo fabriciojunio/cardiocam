@@ -72,6 +72,62 @@ class ParametrosSimulacao:
     tom_pele: tuple[int, int, int] = (150, 175, 205)
     """Cor base da pele em BGR."""
 
+    amplitude_especular: float = 0.0
+    """Amplitude da componente **especular** da reflexão, em fração da
+    intensidade da pele.
+
+    É o termo que a hipótese H1 do projeto de iniciação científica aponta como
+    causa real da degradação por movimento. A reflexão da pele tem duas partes:
+    a difusa, que atravessa o tecido e carrega o pulso, e a especular, que
+    quica na superfície sem entrar e **tem a cromaticidade do iluminante**, não
+    a do tom de pele.
+
+    CHROM e POS se apoiam em supor uma direção de tom de pele fixa no espaço de
+    cor. Um termo especular que varia no tempo move essa direção, e é por isso
+    que ele degrada os dois métodos de um jeito que simples deslocamento da
+    região não degrada. Virar a cabeça muda o ângulo entre pele e luz, e com ele
+    a fração especular: daí a amarração com a frequência do movimento.
+    """
+
+    especular_hz: float = 0.0
+    """Frequência da oscilação especular. Em zero, segue `movimento_hz`, que é
+    o acoplamento físico esperado: a especularidade varia porque a cabeça se
+    move."""
+
+    cor_iluminante: tuple[int, int, int] = (255, 255, 255)
+    """Cor do iluminante em BGR. Branco cobre luz de ambiente comum; valores
+    desbalanceados representam lâmpada quente ou tela de computador."""
+
+    movimento_camera_px: float = 0.0
+    """Deslocamento da câmera, em pixels.
+
+    Separado de `movimento_px`, que é a cabeça se movendo, porque os dois têm
+    efeitos **diferentes** e a hipótese H2 depende de distinguí-los. Cabeça que
+    se move mantém o fundo parado, e a referência de iluminação continua
+    válida. Câmera que se move arrasta o fundo junto: o trecho usado como
+    referência deixa de ser o mesmo trecho, e a rectificação passa a injetar
+    uma variação espúria em vez de remover uma real.
+    """
+
+    movimento_camera_hz: float = 0.3
+
+    cor_fundo_bgr: tuple[int, int, int] = (60, 60, 60)
+    """Cor média do fundo em BGR, usada quando a série do fundo é gerada.
+
+    Cinza neutro de propósito: fundo colorido introduziria uma segunda direção
+    cromática e misturaria dois efeitos no mesmo cenário.
+    """
+
+    com_fundo: bool = False
+    """Gera também a série do fundo.
+
+    Fica desligado por padrão de propósito: ligar muda o resultado de todo
+    cenário já existente, porque `usar_fundo` da configuração de análise vem
+    ligada e a rectificação entraria em cena. Os cenários novos ligam
+    explicitamente, e assim a tabela dos 56 cenários continua comparável com a
+    que está publicada no README.
+    """
+
     semente: int = 0
     jitter_fps: float = 0.0
     """Desvio padrão do erro de temporização entre quadros, em segundos."""
@@ -150,9 +206,17 @@ def gerar_serie_rgb(parametros: ParametrosSimulacao) -> SerieRGB:
         tempos, parametros.frequencia_hz, parametros.harmonicos, parametros.fase
     )
     iluminacao = _distorcao_iluminacao(tempos, parametros)
+    especular = _componente_especular(tempos, parametros)
     gerador = np.random.default_rng(parametros.semente)
 
     azul_base, verde_base, vermelho_base = parametros.tom_pele
+    iluminante = dict(
+        zip(("azul", "verde", "vermelho"), parametros.cor_iluminante, strict=True)
+    )
+    # Intensidade média da pele: a referência de escala da componente
+    # especular. Usar a média, e não o canal, é o que mantém o termo com a cor
+    # do iluminante em vez da cor da pele.
+    escala_especular = float(np.mean(parametros.tom_pele))
     canais = {}
     for nome, base in (
         ("vermelho", vermelho_base),
@@ -161,6 +225,22 @@ def gerar_serie_rgb(parametros: ParametrosSimulacao) -> SerieRGB:
     ):
         ganho = GANHO_CANAL[nome]
         limpo = base * iluminacao * (1.0 + parametros.amplitude_pulso * ganho * pulso)
+        # A componente especular soma na cor do ILUMINANTE, e não na da pele.
+        # É essa diferença que quebra a hipótese de direção de tom de pele
+        # fixa, e é por isso que ela entra como parcela e não como fator: fator
+        # seria mais uma variação de brilho, que CHROM e POS já cancelam.
+        #
+        # A escala é a intensidade MÉDIA da pele, igual nos três canais, e não
+        # a base de cada canal. A primeira versão usava a base do canal e o
+        # efeito media zero: multiplicar pela cor da pele devolve um termo
+        # proporcional a ela, que é exatamente uma variação de brilho
+        # disfarçada, e CHROM e POS continuavam com erro de centésimos. A luz
+        # que quica na superfície não sabe de que cor é a pele; é essa
+        # independência que move a direção cromática.
+        if parametros.amplitude_especular:
+            limpo = limpo + escala_especular * parametros.amplitude_especular * (
+                especular * (iluminante[nome] / 255.0)
+            )
         # Ruído já reduzido pela média espacial sobre a região de interesse.
         ruido = gerador.normal(0.0, parametros.ruido_sensor / 40.0, tempos.size)
         canais[nome] = limpo + ruido
@@ -171,7 +251,58 @@ def gerar_serie_rgb(parametros: ParametrosSimulacao) -> SerieRGB:
         canais["azul"],
         parametros.fps,
         tempos,
+        fundo=_serie_do_fundo(tempos, parametros, iluminacao, gerador)
+        if parametros.com_fundo
+        else None,
     )
+
+
+def _componente_especular(
+    tempos: np.ndarray, parametros: ParametrosSimulacao
+) -> np.ndarray:
+    """Oscilação da fração especular, normalizada entre 0 e 1.
+
+    Zero quando não há especularidade pedida. A frequência segue a do
+    movimento quando não é dada, porque fisicamente é o movimento que muda o
+    ângulo entre a pele e a luz.
+    """
+    if not parametros.amplitude_especular:
+        return np.zeros_like(tempos, dtype=float)
+    frequencia = parametros.especular_hz or parametros.movimento_hz
+    return 0.5 * (1.0 + np.sin(2.0 * np.pi * frequencia * tempos))
+
+
+def _serie_do_fundo(
+    tempos: np.ndarray,
+    parametros: ParametrosSimulacao,
+    iluminacao: np.ndarray,
+    gerador: np.random.Generator,
+) -> np.ndarray:
+    """Série 3xN do fundo, que não tem pulso.
+
+    Com a câmera parada, o fundo é a iluminação pura mais ruído, e por isso
+    serve de referência perfeita. Com a câmera se movendo, entra um termo que
+    **não** é iluminação: o trecho enquadrado muda, e a média do trecho muda
+    junto. Esse termo é o que a hipótese H2 prevê que estrague a rectificação,
+    e aqui ele existe de forma isolada, que é o que dado real nunca permite.
+    """
+    cor = np.array(
+        [float(canal) for canal in (parametros.cor_fundo_bgr)], dtype=float
+    ).reshape(3, 1)
+    base = cor * iluminacao.reshape(1, -1)
+
+    if parametros.movimento_camera_px:
+        # A amplitude é proporcional ao deslocamento porque enquadrar um trecho
+        # diferente muda tanto mais a média quanto maior for o deslocamento. O
+        # divisor de 100 px calibra a escala: 10 px dão 10% de variação, que é
+        # a ordem do que se mede num fundo de parede com textura.
+        arraste = np.sin(
+            2.0 * np.pi * parametros.movimento_camera_hz * tempos
+        ) * (parametros.movimento_camera_px / 100.0)
+        base = base * (1.0 + arraste.reshape(1, -1))
+
+    ruido = gerador.normal(0.0, parametros.ruido_sensor / 40.0, (3, tempos.size))
+    return base + ruido
 
 
 @dataclass
