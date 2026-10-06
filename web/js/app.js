@@ -1178,11 +1178,33 @@ function estadoDaTrilha() {
   return `${trilha.readyState}${trilha.muted ? '/mudo' : ''}${trilha.enabled ? '' : '/desligada'}`;
 }
 
+let quadrosNoPulsoAnterior = 0;
+let instanteDoPulsoAnterior = 0;
+
 function pulsar() {
   if (!rodando) return;
   const estado = cadencia?.estado;
+  const quadros = estado?.quadros ?? 0;
+  const agora = performance.now();
+  /*
+    A taxa do diagnóstico sai da contagem de quadros, e não do medidor.
+
+    `medidor.fpsEfetivo` devolve 30 enquanto não houver dez amostras, que é um
+    valor de partida razoável para o processamento e **mentira** num
+    diagnóstico: ele dizia 30 numa captura rodando a 16, e quem lesse isso
+    procuraria o defeito no lugar errado. Aqui a taxa é a entregue de fato,
+    medida entre dois pulsos, e vale mesmo sem rosto na frente da câmera.
+  */
+  const intervalo = (agora - instanteDoPulsoAnterior) / 1000;
+  const taxaReal = instanteDoPulsoAnterior && intervalo > 0
+    ? (quadros - quadrosNoPulsoAnterior) / intervalo
+    : Number.NaN;
+  quadrosNoPulsoAnterior = quadros;
+  instanteDoPulsoAnterior = agora;
+
   registrar('pulso', {
-    quadros: estado?.quadros ?? 0,
+    quadros,
+    taxaReal,
     resgates: estado?.resgates ?? 0,
     callback: estado?.usandoCallback ?? false,
     silencioMs: Math.round(estado?.silencioMs ?? 0),
@@ -1192,12 +1214,14 @@ function pulsar() {
     tempoDoVideo: el.video.currentTime,
     amostras: medidor?.amostras?.length ?? 0,
     progresso: medidor?.progresso ?? 0,
-    taxa: medidor?.fpsEfetivo ?? 0,
+    taxaDoMedidor: medidor?.fpsEfetivo ?? 0,
   });
 }
 
 function ligarPulsacao() {
   desligarPulsacao();
+  quadrosNoPulsoAnterior = 0;
+  instanteDoPulsoAnterior = 0;
   pulsacao = setInterval(pulsar, PULSACAO_MS);
 }
 

@@ -119,7 +119,18 @@ async function principal() {
   process.stdout.write(`navegador: ${executavel}\n`);
   process.stdout.write(`câmera: ${comCameraReal ? 'a do computador' : comVideo ? videoFalso : 'padrão do Chromium'}\n`);
 
-  const servidor = await servir(RAIZ);
+  /*
+    Por padrão a página vem de um servidor local, para testar o que está no
+    disco. Com `CARDIOCAM_URL`, vem do endereço indicado, e aí o que se testa é
+    o que está publicado. Os dois importam, e por motivos diferentes: o local
+    pega o defeito antes de subir, e o publicado pega o que só aparece depois,
+    como arquivo que não foi junto no envio.
+  */
+  const externo = process.env.CARDIOCAM_URL || null;
+  const servidor = externo
+    ? { url: externo, fechar: async () => {} }
+    : await servir(RAIZ);
+  process.stdout.write(`página: ${servidor.url}` + NOVA_LINHA);
   const navegador = await abrirNavegador({
     executavel,
     argumentos: comCameraReal ? [] : [
@@ -202,7 +213,7 @@ async function principal() {
     for (const p of pulsos) {
       process.stdout.write(
         `  ${p.segundos.toFixed(1).padStart(6)}s  quadros=${String(p.dados.quadros).padStart(4)}`
-        + `  resgates=${p.dados.resgates}  taxa=${Number(p.dados.taxa).toFixed(1)}`
+        + `  resgates=${p.dados.resgates}  taxa=${Number(p.dados.taxaReal).toFixed(1)}`
         + `  amostras=${String(p.dados.amostras).padStart(4)}`
         + `  progresso=${Number(p.dados.progresso).toFixed(2)}`
         + `  trilha=${p.dados.trilha}  pronto=${p.dados.prontoDoVideo}\n`,
