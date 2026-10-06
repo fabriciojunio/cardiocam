@@ -1004,6 +1004,20 @@ function pararCamera() {
   mesmo valor e e descartado em vez de entrar duplicado.
 */
 let ultimoTempoDeQuadro = -1;
+let ultimoQuadroEm = 0;
+let vigia = null;
+
+/*
+  Tempo sem quadro novo que faz o vigia assumir o laco.
+
+  `requestVideoFrameCallback` so dispara quando chega quadro NOVO, e se a camera
+  engasga ou o navegador para de compor a imagem a cadeia morre em silencio e
+  nunca mais reata. Foi o que aconteceu: a camera "parava sozinha".
+
+  Meio segundo e folgado para 20 quadros por segundo, onde o intervalo normal e
+  50 ms, e curto o bastante para a pessoa nao perceber a retomada.
+*/
+const LIMITE_SEM_QUADRO_MS = 500;
 
 function suportaCallbackDeQuadro() {
   return typeof el.video?.requestVideoFrameCallback === 'function';
@@ -1013,11 +1027,16 @@ function agendarProximoQuadro() {
   if (!rodando) return;
   if (suportaCallbackDeQuadro()) {
     animacao = el.video.requestVideoFrameCallback((_agora, metadados) => {
+      animacao = null;
       laco(metadados);
     });
     return;
   }
-  animacao = requestAnimationFrame(() => laco(null));
+  animacao = requestAnimationFrame(() => {
+    animacao = null;
+    laco(null);
+    vigiarQuadros();
+  });
 }
 
 function cancelarProximoQuadro() {
@@ -1030,21 +1049,60 @@ function cancelarProximoQuadro() {
   animacao = null;
 }
 
+/*
+  Vigia a cadeia de quadros, e a retoma quando ela para.
+
+  Roda em `requestAnimationFrame`, que nao depende da camera e por isso continua
+  batendo mesmo quando nenhum quadro chega. Ele nao mede nada: so percebe o
+  silencio e reata, pelo caminho de reserva.
+*/
+function vigiarQuadros() {
+  if (!rodando) {
+    vigia = null;
+    return;
+  }
+  vigia = requestAnimationFrame(vigiarQuadros);
+  if (performance.now() - ultimoQuadroEm <= LIMITE_SEM_QUADRO_MS) return;
+  cancelarProximoQuadro();
+  laco(null);
+}
+
 function laco(metadados) {
   if (!rodando) return;
+  ultimoQuadroEm = performance.now();
   agendarProximoQuadro();
 
   const video = el.video;
   if (!video.videoWidth) return;
 
-  // Sem a API de quadro, descarta repeticao comparando o tempo de midia. Um
-  // quadro ja processado tem exatamente o mesmo `currentTime`, e deixa-lo
-  // entrar de novo e o defeito que esta funcao existe para impedir.
-  if (metadados === null) {
-    const tempoDoQuadro = video.currentTime;
-    if (tempoDoQuadro === ultimoTempoDeQuadro) return;
-    ultimoTempoDeQuadro = tempoDoQuadro;
+  /*
+    UMA base de tempo so, e ela e a da midia.
+
+    Misturar `performance.now()`, que conta desde o carregamento da pagina e
+    chega as dezenas de segundos, com `mediaTime`, que comeca do zero, foi um
+    defeito real: a primeira amostra entrava com 42 e as seguintes com 0,1, a
+    duracao acumulada ficava negativa, e a barra de progresso nunca completava.
+    Era o "a contagem demora muito".
+
+    `mediaTime` e `currentTime` vivem na mesma linha do tempo, entao os dois
+    caminhos sao compativeis entre si.
+  */
+  const tempoDoQuadro = metadados && Number.isFinite(metadados.mediaTime)
+    ? metadados.mediaTime
+    : video.currentTime;
+  if (!Number.isFinite(tempoDoQuadro)) return;
+
+  // Quadro repetido tem exatamente o mesmo tempo de midia. Deixa-lo entrar de
+  // novo e o defeito que esta funcao existe para impedir: copias carregam o
+  // mesmo ruido e so fazem o piso de ruido parecer mais baixo do que e.
+  if (tempoDoQuadro === ultimoTempoDeQuadro) return;
+
+  // Tempo andando para tras quer dizer fonte reiniciada. Acumular por cima
+  // produziria duracao negativa, que e o defeito acima com outra roupa.
+  if (tempoDoQuadro < ultimoTempoDeQuadro) {
+    medidor?.reiniciar();
   }
+  ultimoTempoDeQuadro = tempoDoQuadro;
 
   const largura = 320;
   const altura = Math.round((video.videoHeight / video.videoWidth) * largura) || 240;
@@ -1097,9 +1155,7 @@ function laco(metadados) {
   // de apresentacao daquele quadro na linha do tempo da midia, e e o carimbo
   // correto para reamostrar: `performance.now()` mede quando o laco rodou, que
   // e outra coisa e carrega o jitter do laco junto.
-  const agora = metadados && Number.isFinite(metadados.mediaTime)
-    ? metadados.mediaTime
-    : performance.now() / 1000;
+  const agora = tempoDoQuadro;
   const estado = rastreamentoLigado && regioesAtuais
     ? medidor.processarQuadro(ctx, largura, altura, agora, regioesAtuais, caixaDoRosto)
     : medidor.processarQuadro(ctx, largura, altura, agora);
@@ -1276,6 +1332,7 @@ async function comecar() {
     rodando = true;
     ultimaAnalise = 0;
     ultimoTempoDeQuadro = -1;
+    ultimoQuadroEm = performance.now();
 
     if (fonte === 'tela') {
       const qualidade = avaliarCaptura(fluxo, null);
@@ -1397,6 +1454,10 @@ function parar() {
   cancelado = true;
   rodando = false;
   cancelarProximoQuadro();
+  if (vigia !== null) {
+    cancelAnimationFrame(vigia);
+    vigia = null;
+  }
   ultimoTempoDeQuadro = -1;
   pararCamera();
   el.palcoVazio.hidden = false;
