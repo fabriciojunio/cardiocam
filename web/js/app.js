@@ -5,6 +5,7 @@
  * gráficos e conversa com o armazenamento local.
  */
 
+import { CadenciaDeQuadros } from './cadencia.js';
 import { confiancaDe } from './dsp.js';
 import { Medidor, analisarVideo, BPM_MAXIMO, BPM_MINIMO } from './medidor.js';
 import { carregarModelo } from './cascata.js';
@@ -77,7 +78,7 @@ let fluxo = null;
 let medidor = null;
 let rodando = false;
 let ultimoResultado = null;
-let animacao = null;
+let cadencia = null;
 let ultimaAnalise = 0;
 let cancelado = false;
 let abrindo = false;
@@ -227,6 +228,7 @@ const QUADROS_MINIMOS_ACEITAVEIS = 14;
 const QUADROS_ANTES_DE_JULGAR = 150;
 let quadrosParaAvaliarDesempenho = 0;
 let jaAvaliouDesempenho = false;
+let resgatesNaUltimaAvaliacao = 0;
 
 /**
  * Desce um degrau de qualidade e reabre, quando a máquina não sustenta.
@@ -241,6 +243,23 @@ async function descerDegrauSeNecessario() {
 
   quadrosParaAvaliarDesempenho += 1;
   if (quadrosParaAvaliarDesempenho < QUADROS_ANTES_DE_JULGAR) return;
+
+  /*
+    Captura que precisou ser resgatada não serve de prova contra a resolução.
+
+    O julgamento aqui supõe que a taxa baixa vem da máquina não dar conta de
+    decodificar e redimensionar o quadro. Se a cadeia de quadros parou e foi
+    reatada, a taxa baixa vem do tempo parado, e descer a resolução não
+    conserta nada: só reinicia a medição, o que o usuário vê como a câmera
+    desligando sozinha. Então o relógio volta a zero e a decisão fica para a
+    próxima janela de avaliação, com dado limpo.
+  */
+  const resgates = cadencia?.estado.resgates ?? 0;
+  if (resgates > resgatesNaUltimaAvaliacao) {
+    resgatesNaUltimaAvaliacao = resgates;
+    quadrosParaAvaliarDesempenho = 0;
+    return;
+  }
 
   jaAvaliouDesempenho = true;
   const entregue = medidor.fpsEfetivo;
@@ -943,7 +962,78 @@ async function clarearAteOAlvo(trilha, capacidades) {
   }
 }
 
+let soltarVigiaDaFonte = null;
+
+/**
+ * Escuta a trilha de vídeo, que é onde a câmera de fato desliga.
+ *
+ * A cadência percebe que parou de chegar quadro, mas não sabe por quê, e as
+ * causas pedem providências diferentes. A trilha sabe, e avisa por três
+ * eventos que ninguém estava ouvindo:
+ *
+ * - `mute`: o sistema tirou a câmera de nós sem encerrar a trilha. Acontece
+ *   quando outro programa a toma, quando a tampa do notebook fecha, e no
+ *   Windows quando a permissão de câmera é revogada com a aba aberta. A trilha
+ *   continua viva e pode voltar sozinha, então aqui não se encerra nada.
+ * - `unmute`: voltou. Vale resgatar na hora, porque o agendamento de quadro
+ *   morreu durante o silêncio e nada mais o religa.
+ * - `ended`: acabou de vez, e aí não há o que esperar. Cabo desconectado,
+ *   dispositivo removido.
+ *
+ * Sem isto a página ficava dizendo "Medindo" sobre uma imagem congelada, que é
+ * a pior saída possível: afirma com confiança algo que deixou de ser verdade.
+ */
+function vigiarAFonte(fonteDeQuadros) {
+  soltarVigiaDaFonte?.();
+  soltarVigiaDaFonte = null;
+
+  // A captura de tela tem vigia próprio, em `tela.js`, e dois avisos para o
+  // mesmo encerramento seriam ruído.
+  if (fonte === 'tela') return;
+
+  const trilha = fonteDeQuadros?.getVideoTracks?.()[0];
+  if (!trilha?.addEventListener) return;
+
+  const silenciou = () => {
+    if (!rodando) return;
+    dizer(
+      'O sistema tirou a câmera desta página e ela parou de entregar imagem. '
+      + 'Costuma ser outro programa pegando a câmera. Feche-o e a medição '
+      + 'continua sozinha.',
+      'alerta',
+    );
+  };
+  const voltou = () => {
+    if (!rodando) return;
+    dizer('A câmera voltou. Retomando a medição.');
+    cadencia?.resgatar();
+  };
+  const terminou = () => {
+    if (!rodando) return;
+    parar();
+    dizer(
+      'A câmera foi desconectada ou encerrada pelo sistema. Reconecte e comece '
+      + 'de novo.',
+      'erro',
+    );
+  };
+
+  trilha.addEventListener('mute', silenciou);
+  trilha.addEventListener('unmute', voltou);
+  trilha.addEventListener('ended', terminou);
+  soltarVigiaDaFonte = () => {
+    trilha.removeEventListener('mute', silenciou);
+    trilha.removeEventListener('unmute', voltou);
+    trilha.removeEventListener('ended', terminou);
+  };
+}
+
 function pararCamera() {
+  cadencia?.parar();
+  if (soltarVigiaDaFonte) {
+    soltarVigiaDaFonte();
+    soltarVigiaDaFonte = null;
+  }
   if (soltarAvisoDeCaptura) {
     soltarAvisoDeCaptura();
     soltarAvisoDeCaptura = null;
@@ -978,131 +1068,71 @@ function pararCamera() {
 
 
 /*
-  Um quadro da camera por vez, e com o tempo do quadro.
+  O agendamento dos quadros mora em `cadencia.js`, com os testes dele.
 
-  Este laco usava `requestAnimationFrame`, que dispara na taxa do MONITOR e nao
-  na da camera. Com tela de 60 Hz e camera entregando 20 ou 30, o mesmo quadro
-  era lido duas ou tres vezes, e cada copia entrava na serie com um carimbo de
-  tempo diferente.
-
-  O estrago nao e obvio e e grande. As copias carregam o MESMO ruido de sensor,
-  entao a serie tem menos amostras independentes do que o codigo supoe, e a
-  promediacao deixa de reduzir o ruido na proporcao esperada. Pior: a camera e
-  a tela nao sao sincronas, o numero de repeticoes varia ao longo do tempo, e
-  essa variacao injeta uma modulacao lenta que cai perto da banda cardiaca.
-
-  Era o que fazia a medicao ser descartada "independente da luz": mais luz nao
-  conserta amostra duplicada.
-
-  `requestVideoFrameCallback` resolve as duas coisas de uma vez. Ele dispara
-  exatamente uma vez por quadro NOVO e entrega `mediaTime`, que e o instante de
-  apresentacao daquele quadro, bem mais fiel que o `performance.now()` lido
-  quando o laco por acaso rodou.
-
-  O caminho de `requestAnimationFrame` continua existindo para navegador que
-  nao tem a API, e la a defesa e comparar `currentTime`: quadro repetido tem o
-  mesmo valor e e descartado em vez de entrar duplicado.
+  Aqui ficou só o que faz com o quadro depois que ele chega. A separação não é
+  arrumação: a cadência é a parte que já falhou duas vezes em produção, e dentro
+  deste arquivo ela era intestável, porque depende de elemento de vídeo, de
+  `requestVideoFrameCallback` e de relógio. Lá ela recebe os três por parâmetro
+  e a suíte consegue simular câmera que para, aba que volta do segundo plano e
+  navegador sem a API.
 */
-let ultimoTempoDeQuadro = -1;
-let ultimoQuadroEm = 0;
-let vigia = null;
 
-/*
-  Tempo sem quadro novo que faz o vigia assumir o laco.
+/**
+ * Monta a cadência e começa a puxar quadro.
+ *
+ * O aviso de silêncio é o ponto que faltava: antes, quando a cadeia de quadros
+ * morria, a tela simplesmente parava sem dizer nada, e quem estava medindo não
+ * tinha como distinguir "travou" de "ainda coletando". Agora a retomada é dita.
+ */
+function ligarCadencia() {
+  cadencia?.parar();
+  cadencia = new CadenciaDeQuadros({
+    video: el.video,
+    aoQuadro: processarQuadroDaCamera,
+    aoSilencio: (silencioMs, estado) => {
+      if (!rodando) return;
+      /*
+        A janela recomeça, e isto não é excesso de zelo.
 
-  `requestVideoFrameCallback` so dispara quando chega quadro NOVO, e se a camera
-  engasga ou o navegador para de compor a imagem a cadeia morre em silencio e
-  nunca mais reata. Foi o que aconteceu: a camera "parava sozinha".
+        Meio segundo sem quadro são dez amostras faltando a 20 por segundo. A
+        análise espectral trata a série como amostrada uniformemente, e a
+        duração acumulada é medida pela diferença entre o primeiro e o último
+        carimbo: com um buraco no meio, o progresso chega a 100% sem que as
+        amostras existam, e a frequência sai de uma base de tempo que não
+        corresponde ao que foi coletado. Seria um número errado com cara de
+        certo, que é o modo de falha que este projeto existe para não ter.
 
-  Meio segundo e folgado para 20 quadros por segundo, onde o intervalo normal e
-  50 ms, e curto o bastante para a pessoa nao perceber a retomada.
-*/
-const LIMITE_SEM_QUADRO_MS = 500;
-
-function suportaCallbackDeQuadro() {
-  return typeof el.video?.requestVideoFrameCallback === 'function';
-}
-
-function agendarProximoQuadro() {
-  if (!rodando) return;
-  if (suportaCallbackDeQuadro()) {
-    animacao = el.video.requestVideoFrameCallback((_agora, metadados) => {
-      animacao = null;
-      laco(metadados);
-    });
-    return;
-  }
-  animacao = requestAnimationFrame(() => {
-    animacao = null;
-    laco(null);
-    vigiarQuadros();
+        O custo é esperar a janela de novo. É o custo certo: medida com buraco
+        não vale menos, vale menos que nada.
+      */
+      medidor?.reiniciar();
+      ultimaAnalise = 0;
+      el.barra.style.width = '0%';
+      dizer(
+        `A câmera ficou ${(silencioMs / 1000).toFixed(1)} s sem entregar imagem. `
+        + `A captura foi retomada${estado.usandoCallback ? '' : ' pelo caminho de reserva'} `
+        + 'e a coleta recomeçou, porque janela com buraco dá frequência errada. '
+        + 'Se isso se repetir, feche os programas que usam a câmera.',
+        'alerta',
+      );
+    },
   });
+  cadencia.iniciar();
 }
 
-function cancelarProximoQuadro() {
-  if (animacao === null) return;
-  if (suportaCallbackDeQuadro() && el.video?.cancelVideoFrameCallback) {
-    el.video.cancelVideoFrameCallback(animacao);
-  } else {
-    cancelAnimationFrame(animacao);
-  }
-  animacao = null;
-}
-
-/*
-  Vigia a cadeia de quadros, e a retoma quando ela para.
-
-  Roda em `requestAnimationFrame`, que nao depende da camera e por isso continua
-  batendo mesmo quando nenhum quadro chega. Ele nao mede nada: so percebe o
-  silencio e reata, pelo caminho de reserva.
-*/
-function vigiarQuadros() {
-  if (!rodando) {
-    vigia = null;
-    return;
-  }
-  vigia = requestAnimationFrame(vigiarQuadros);
-  if (performance.now() - ultimoQuadroEm <= LIMITE_SEM_QUADRO_MS) return;
-  cancelarProximoQuadro();
-  laco(null);
-}
-
-function laco(metadados) {
-  if (!rodando) return;
-  ultimoQuadroEm = performance.now();
-  agendarProximoQuadro();
+function processarQuadroDaCamera({ tempoS, retrocedeu }) {
+  if (!rodando || !medidor) return;
 
   const video = el.video;
   if (!video.videoWidth) return;
 
-  /*
-    UMA base de tempo so, e ela e a da midia.
-
-    Misturar `performance.now()`, que conta desde o carregamento da pagina e
-    chega as dezenas de segundos, com `mediaTime`, que comeca do zero, foi um
-    defeito real: a primeira amostra entrava com 42 e as seguintes com 0,1, a
-    duracao acumulada ficava negativa, e a barra de progresso nunca completava.
-    Era o "a contagem demora muito".
-
-    `mediaTime` e `currentTime` vivem na mesma linha do tempo, entao os dois
-    caminhos sao compativeis entre si.
-  */
-  const tempoDoQuadro = metadados && Number.isFinite(metadados.mediaTime)
-    ? metadados.mediaTime
-    : video.currentTime;
-  if (!Number.isFinite(tempoDoQuadro)) return;
-
-  // Quadro repetido tem exatamente o mesmo tempo de midia. Deixa-lo entrar de
-  // novo e o defeito que esta funcao existe para impedir: copias carregam o
-  // mesmo ruido e so fazem o piso de ruido parecer mais baixo do que e.
-  if (tempoDoQuadro === ultimoTempoDeQuadro) return;
-
-  // Tempo andando para tras quer dizer fonte reiniciada. Acumular por cima
-  // produziria duracao negativa, que e o defeito acima com outra roupa.
-  if (tempoDoQuadro < ultimoTempoDeQuadro) {
-    medidor?.reiniciar();
+  if (retrocedeu) {
+    // Fonte reiniciada. Acumular por cima produziria duração negativa, que é o
+    // defeito que fazia a barra de progresso nunca completar.
+    medidor.reiniciar();
+    ultimaAnalise = 0;
   }
-  ultimoTempoDeQuadro = tempoDoQuadro;
 
   const largura = 320;
   const altura = Math.round((video.videoHeight / video.videoWidth) * largura) || 240;
@@ -1155,7 +1185,7 @@ function laco(metadados) {
   // de apresentacao daquele quadro na linha do tempo da midia, e e o carimbo
   // correto para reamostrar: `performance.now()` mede quando o laco rodou, que
   // e outra coisa e carrega o jitter do laco junto.
-  const agora = tempoDoQuadro;
+  const agora = tempoS;
   const estado = rastreamentoLigado && regioesAtuais
     ? medidor.processarQuadro(ctx, largura, altura, agora, regioesAtuais, caixaDoRosto)
     : medidor.processarQuadro(ctx, largura, altura, agora);
@@ -1331,8 +1361,7 @@ async function comecar() {
     el.palco.classList.toggle('tela', fonte === 'tela');
     rodando = true;
     ultimaAnalise = 0;
-    ultimoTempoDeQuadro = -1;
-    ultimoQuadroEm = performance.now();
+    vigiarAFonte(fluxo);
 
     if (fonte === 'tela') {
       const qualidade = avaliarCaptura(fluxo, null);
@@ -1366,7 +1395,8 @@ async function comecar() {
     }
     quadrosParaAvaliarDesempenho = 0;
     jaAvaliouDesempenho = false;
-    laco(null);
+    resgatesNaUltimaAvaliacao = 0;
+    ligarCadencia();
   } catch (erro) {
     pararCamera();
     if (cancelado) {
@@ -1453,12 +1483,8 @@ function mensagemDeErroDeCamera(erro) {
 function parar() {
   cancelado = true;
   rodando = false;
-  cancelarProximoQuadro();
-  if (vigia !== null) {
-    cancelAnimationFrame(vigia);
-    vigia = null;
-  }
-  ultimoTempoDeQuadro = -1;
+  cadencia?.parar();
+  cadencia = null;
   pararCamera();
   el.palcoVazio.hidden = false;
   el.btnParar.disabled = true;
@@ -1723,6 +1749,19 @@ window.addEventListener('resize', () => {
 });
 
 window.addEventListener('beforeunload', pararCamera);
+
+/*
+  Aba voltando ao primeiro plano.
+
+  Em segundo plano o navegador congela `requestAnimationFrame` e deixa de
+  compor a imagem, então nem o laço nem o vigia batem. O vigia sozinho já
+  resolveria, mas só depois de meio segundo de constatar o que aqui já se sabe.
+  Esperar esse meio segundo para retomar algo que o usuário está olhando agora
+  não tem motivo.
+*/
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && rodando) cadencia?.resgatar();
+});
 
 atualizarHistorico();
 limparLeitura();
