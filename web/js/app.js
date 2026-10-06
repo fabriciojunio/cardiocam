@@ -6,6 +6,8 @@
  */
 
 import { CadenciaDeQuadros } from './cadencia.js';
+import { equilibrar, LUMINANCIA_MINIMA, TAXA_MINIMA } from './exposicao.js';
+import { comoTexto, limpar as limparRegistro, registrar } from './registro.js';
 import { confiancaDe } from './dsp.js';
 import { Medidor, analisarVideo, BPM_MAXIMO, BPM_MINIMO } from './medidor.js';
 import { carregarModelo } from './cascata.js';
@@ -71,6 +73,7 @@ const el = {
   resumoPessoa: $('resumoPessoa'),
   btnExportar: $('btnExportar'),
   btnLimpar: $('btnLimpar'),
+  btnDiagnostico: $('btnDiagnostico'),
 };
 
 let fonte = 'camera';
@@ -238,21 +241,33 @@ let resgatesNaUltimaAvaliacao = 0;
  * escolha entre "1080p" e "720p" seria transferir para ele uma decisão que o
  * programa pode medir.
  */
-async function descerDegrauSeNecessario() {
+/**
+ * Reage à taxa de quadros baixa, **sem reabrir a câmera**.
+ *
+ * Esta função é o defeito que o usuário via como "a câmera desliga e liga". A
+ * versão anterior chamava `parar()` e `comecar()` para trocar de resolução, o
+ * que derruba o dispositivo e o abre de novo: a luz da webcam apaga e acende, a
+ * imagem some por um segundo, e a janela de coleta recomeça do zero. Fazia isso
+ * até duas vezes por sessão, e nenhuma delas resolvia, porque a causa medida
+ * não era a resolução.
+ *
+ * Duas mudanças. A resolução passou a ser pedida na **trilha viva**, com
+ * `applyConstraints`, que a câmera aceita sem reiniciar. E a resolução deixou
+ * de ser a primeira suspeita: antes dela vem a exposição, que foi a causa
+ * medida nesta máquina, e o relatório diz qual das duas limitou.
+ */
+async function ajustarQualidadeSeNecessario() {
   if (jaAvaliouDesempenho || !rodando || !medidor) return;
 
   quadrosParaAvaliarDesempenho += 1;
   if (quadrosParaAvaliarDesempenho < QUADROS_ANTES_DE_JULGAR) return;
 
   /*
-    Captura que precisou ser resgatada não serve de prova contra a resolução.
+    Captura que precisou ser resgatada não serve de prova contra nada.
 
-    O julgamento aqui supõe que a taxa baixa vem da máquina não dar conta de
-    decodificar e redimensionar o quadro. Se a cadeia de quadros parou e foi
-    reatada, a taxa baixa vem do tempo parado, e descer a resolução não
-    conserta nada: só reinicia a medição, o que o usuário vê como a câmera
-    desligando sozinha. Então o relógio volta a zero e a decisão fica para a
-    próxima janela de avaliação, com dado limpo.
+    Se a cadeia de quadros parou e foi reatada, a taxa baixa vem do tempo
+    parado. O relógio volta a zero e a decisão fica para a próxima janela, com
+    dado limpo.
   */
   const resgates = cadencia?.estado.resgates ?? 0;
   if (resgates > resgatesNaUltimaAvaliacao) {
@@ -263,7 +278,29 @@ async function descerDegrauSeNecessario() {
 
   jaAvaliouDesempenho = true;
   const entregue = medidor.fpsEfetivo;
+  registrar('qualidade.avaliada', {
+    entregue,
+    degrau: degrauAtual,
+    luz: medidor.luminanciaMedia,
+  });
   if (entregue >= QUADROS_MINIMOS_ACEITAVEIS) return;
+
+  /*
+    Exposição antes de resolução, porque foi o que a medida mostrou.
+
+    `testes/navegador/medir_taxas.mjs` entregou 8,0 quadros por segundo tanto em
+    1920x1080 quanto em 320x240 nesta webcam. Taxa que não muda com o tamanho do
+    quadro não é limitada por banda nem por processamento: é limitada pelo tempo
+    que a câmera passa expondo cada quadro. Descer a resolução nesse caso é
+    trocar sinal por nada.
+  */
+  const limite = limiteDaCaptura();
+  if (limite) {
+    dizer(limite.texto, 'alerta');
+    registrar('qualidade.limite', { tipo: limite.tipo, entregue });
+    return;
+  }
+
   if (degrauAtual >= DEGRAUS_DE_QUALIDADE.length - 1) {
     dizer(
       `A captura está em ${entregue.toFixed(0)} quadros por segundo, que é `
@@ -275,15 +312,56 @@ async function descerDegrauSeNecessario() {
 
   degrauAtual += 1;
   const alvo = DEGRAUS_DE_QUALIDADE[degrauAtual];
+  const trilha = fluxo?.getVideoTracks?.()[0];
+  registrar('degrau.descida', { de: degrauAtual - 1, para: degrauAtual, entregue });
+
+  if (!trilha?.applyConstraints) {
+    dizer(
+      `A captura está em ${entregue.toFixed(0)} quadros por segundo e esta câmera `
+      + 'não aceita mudar de resolução sem reabrir. Pare e comece de novo se '
+      + 'quiser tentar numa resolução menor.',
+      'alerta',
+    );
+    return;
+  }
+
+  try {
+    await trilha.applyConstraints(alvo);
+  } catch {
+    registrar('degrau.recusado', { degrau: degrauAtual });
+    dizer(
+      `A câmera recusou baixar para ${alvo.width.ideal}x${alvo.height.ideal}. `
+      + `A captura segue em ${entregue.toFixed(0)} quadros por segundo.`,
+      'alerta',
+    );
+    return;
+  }
+
+  const ajustes = trilha.getSettings?.() ?? {};
+  if (ajustes.width) el.resolucao.textContent = `${ajustes.width}x${ajustes.height}`;
+  registrar('degrau.aplicada', resumoDosAjustes(ajustes));
+
+  /*
+    A janela recomeça, e a avaliação também.
+
+    A resolução mudou no meio da série, e a média espacial de antes e a de
+    depois não são a mesma medida. Misturá-las na mesma janela é juntar dois
+    instrumentos diferentes num número só. Recomeçar custa a janela e é o custo
+    certo, e é muito mais barato que reabrir a câmera.
+  */
+  medidor.reiniciar();
+  ultimaAnalise = 0;
+  el.barra.style.width = '0%';
+  quadrosParaAvaliarDesempenho = 0;
+  jaAvaliouDesempenho = false;
+
   dizer(
-    `A máquina entregou ${entregue.toFixed(0)} quadros por segundo nesta `
-    + `resolução. Baixando para ${alvo.width.ideal}x${alvo.height.ideal} e `
-    + 'recomeçando, porque taxa de quadros estável vale mais que resolução.',
+    `A captura estava em ${entregue.toFixed(0)} quadros por segundo. Baixei para `
+    + `${ajustes.width || alvo.width.ideal}x${ajustes.height || alvo.height.ideal} `
+    + 'sem desligar a câmera, porque taxa de quadros estável vale mais que '
+    + 'resolução. A coleta recomeçou.',
     'alerta',
   );
-  parar();
-  await espera(400);
-  comecar();
 }
 
 /**
@@ -459,6 +537,7 @@ const PRAZO_POR_TENTATIVA_MS = 6000;
  */
 function pedirCamera(restricoes, prazoMs = PRAZO_POR_TENTATIVA_MS) {
   let desistiu = false;
+  registrar('camera.pedida', { restricoes: JSON.stringify(restricoes) });
   const pedido = navigator.mediaDevices.getUserMedia({ video: restricoes, audio: false });
 
   pedido
@@ -737,9 +816,19 @@ async function iniciarCamera() {
   }
 
   const trilha = fluxo.getVideoTracks()[0];
+  registrar('camera.aberta', {
+    rotulo: trilha?.label || '?',
+    ...resumoDosAjustes(trilha?.getSettings?.()),
+  });
   await subirResolucaoSePuder(trilha);
   const ajustes = trilha?.getSettings?.() ?? {};
+  registrar('camera.apos_resolucao', resumoDosAjustes(ajustes));
+  // O ajuste de exposição leva alguns segundos e mexe na imagem enquanto roda.
+  // Sem esta linha a tela fica dizendo "Pedindo acesso à câmera" o tempo todo,
+  // e a pessoa vê a imagem piscando sem explicação.
+  dizer('Ajustando a exposição da câmera…');
   await travarAjustesAutomaticos();
+  registrar('camera.apos_exposicao', resumoDosAjustes(trilha?.getSettings?.()));
   await atualizarListaDeCameras();
   return ajustes;
 }
@@ -785,6 +874,7 @@ async function subirResolucaoSePuder(trilha) {
   // Já está igual ou melhor que o alvo: mexer só arriscaria piorar.
   if ((atual.width || 0) >= alvoLargura) return;
 
+  registrar('restricao.resolucao', { largura: alvoLargura, altura: alvoAltura });
   try {
     await trilha.applyConstraints({
       width: { ideal: alvoLargura },
@@ -804,57 +894,38 @@ async function subirResolucaoSePuder(trilha) {
     // promediação. Altura o navegador deriva pela proporção do sensor. A taxa
     // vai junto, porque sem ela a câmera volta para a taxa máxima e perde o
     // tempo de exposição.
+    registrar('restricao.resolucao_recusada', {});
     try {
       await trilha.applyConstraints({
         width: { ideal: alvoLargura },
         frameRate: TAXA_ALVO,
       });
     } catch {
-      /* a câmera fica no modo em que abriu */
+      registrar('restricao.largura_recusada', {});
     }
   }
 }
 
 /**
- * Tenta fixar exposição e balanço de branco.
+ * Trava o que o controle automático estraga, e equilibra o que ele negocia.
  *
- * É o ajuste de câmera que mais afeta a medição. Os dois controles trabalham
- * contra o que queremos medir: quando a pele escurece por causa do pulso, a
- * exposição automática clareia a imagem e apaga parte do sinal; e o balanço de
- * branco automático mexe no ganho de cada canal separadamente, criando uma
- * variação de cor que os métodos cromáticos não cancelam.
+ * Exposição e balanço de branco automáticos trabalham contra a medição. Quando
+ * a pele escurece por causa do pulso, a exposição clareia a imagem e apaga
+ * parte do sinal; e o balanço de branco mexe no ganho de cada canal
+ * separadamente, criando uma variação de cor que os métodos cromáticos não
+ * cancelam. Travar os dois é obrigatório.
  *
- * Poucos navegadores expõem esses controles, e em desktop quase nenhum. Quando
- * não dá, a rectificação por referência de fundo cobre boa parte do problema.
- */
-/**
- * Luminância alvo da pele, de 0 a 255.
+ * O que mudou, e por quê: a versão anterior travava a exposição **onde a câmera
+ * estivesse** e depois só sabia subi-la, atrás de luz. Numa webcam que abre com
+ * a exposição no máximo, isso congelava a captura em oito quadros por segundo,
+ * e o controle de qualidade, lendo a taxa baixa, reabria a câmera numa
+ * resolução menor, achando que o problema era a máquina. Reabria duas vezes, e
+ * do lado de fora isso é a câmera desligando e ligando sozinha. A medição em
+ * `testes/navegador/medir_taxas.mjs` mostrou a taxa igual, 8,0, de 1920x1080 a
+ * 320x240, o que descarta resolução e banda; e `medir_exposicao.mjs` mostrou a
+ * mesma câmera indo a 15,9 com exposição 625 e a 30,0 com 312.
  *
- * Abaixo de 60 o pulso, que vale 0,1% a 1% da intensidade, fica menor que um
- * nível inteiro, e o sensor entrega inteiros. 110 dá folga confortável sem
- * chegar perto de estourar a pele, que começa a saturar por volta de 200 e aí
- * perde a modulação inteira.
- */
-const LUMINANCIA_ALVO = 110;
-
-/**
- * Trava exposição e balanço de branco, **depois de deixar a imagem clara**.
- *
- * A versão anterior fazia só a metade disto, e a metade que faltava era a que
- * aparecia na tela. Ela punha `exposureMode: 'manual'` sem definir tempo de
- * exposição, então a câmera congelava no valor que tivesse no instante da
- * abertura. Num quarto com luz de teto isso é um valor escuro, e a imagem
- * ficava escura o resto da sessão.
- *
- * O travamento precisa existir: exposição automática clareia a imagem
- * justamente quando a pele escurece por causa do pulso, apagando o sinal. Mas
- * travar no escuro troca um problema por outro pior, porque com pouca luz o
- * pulso não chega a existir no sinal.
- *
- * A sequência aqui resolve os dois: deixa o automático assentar, lê o tempo de
- * exposição que ele escolheu, trava, e então **sobe o tempo até a pele chegar
- * na luminância alvo**. É malha fechada com alvo medido, e não um valor fixo
- * que funcionaria só numa sala.
+ * Agora o ajuste é um laço sobre as duas grandezas, em `exposicao.js`.
  */
 async function travarAjustesAutomaticos() {
   try {
@@ -866,20 +937,68 @@ async function travarAjustesAutomaticos() {
     await espera(700);
 
     const capacidades = trilha.getCapabilities();
-    const avancado = [];
-    if (capacidades.exposureMode?.includes('manual')) avancado.push({ exposureMode: 'manual' });
     if (capacidades.whiteBalanceMode?.includes('manual')) {
-      avancado.push({ whiteBalanceMode: 'manual' });
+      registrar('restricao.travar', { modos: 'whiteBalanceMode' });
+      await trilha.applyConstraints({ advanced: [{ whiteBalanceMode: 'manual' }] });
     }
-    if (!avancado.length) return false;
 
-    await trilha.applyConstraints({ advanced: avancado });
-    await clarearAteOAlvo(trilha, capacidades);
+    const relato = await equilibrar({
+      trilha,
+      video: el.video,
+      luminancia: luminanciaDoQuadro,
+      espera,
+      registrar,
+    });
+    contarRelatoDaExposicao(relato);
     return true;
-  } catch {
+  } catch (erro) {
     // Falhar aqui é rotina e não deve interromper a medição.
+    registrar('restricao.travar_falhou', { erro: erro?.name || String(erro) });
     return false;
   }
+}
+
+/** O que a câmera ficou, guardado para a mensagem e para o diagnóstico. */
+let relatoDaExposicao = null;
+
+function contarRelatoDaExposicao(relato) {
+  relatoDaExposicao = relato;
+}
+
+/**
+ * Diz, em uma frase, o que limita esta captura.
+ *
+ * Três limites possíveis e três providências diferentes, e misturá-los é o que
+ * fazia a página mandar fechar programas quando o que faltava era luz.
+ */
+function limiteDaCaptura() {
+  const relato = relatoDaExposicao;
+  if (!relato) return null;
+  const taxa = relato.taxa;
+  const luz = relato.luz;
+
+  if (Number.isFinite(luz) && luz < LUMINANCIA_MINIMA) {
+    return {
+      tipo: 'luz',
+      texto:
+        `A imagem está escura: ${luz.toFixed(0)} de 255 de luminância, e abaixo `
+        + `de ${LUMINANCIA_MINIMA} o pulso fica menor que o passo de quantização `
+        + 'da câmera. Ponha uma luz de frente, não atrás. É a providência mais '
+        + 'eficaz que existe do lado de quem mede.',
+    };
+  }
+  if (Number.isFinite(taxa) && taxa < TAXA_MINIMA) {
+    return {
+      tipo: 'taxa',
+      texto:
+        `A câmera está entregando ${taxa.toFixed(0)} quadros por segundo, abaixo `
+        + `dos ${TAXA_MINIMA} que a medição pede. ${relato.ajustou
+          ? 'Já encurtei a exposição o quanto esta câmera deixa.'
+          : 'Esta câmera não deixa ajustar a exposição pelo navegador.'} `
+        + 'Mais luz no ambiente faz a câmera acelerar sozinha.',
+    };
+  }
+  return null;
 }
 
 /** Luminância média do quadro atual, pela conversão BT.601. */
@@ -916,68 +1035,25 @@ function luminanciaDoQuadro() {
 }
 
 /**
- * Sobe o tempo de exposição até a imagem chegar na luminância alvo.
- *
- * Busca proporcional e com poucos passos de propósito: a resposta da câmera não
- * é linear nem conhecida, e cada passo custa um quadro para surtir efeito.
- * Cinco passos levam de uma imagem bem escura ao alvo, e parar cedo é melhor
- * que oscilar em volta dele.
- *
- * Quando a câmera não expõe `exposureTime`, tenta `brightness`, que algumas
- * expõem no lugar. Não conseguindo nenhum dos dois, a medição segue com o que
- * houver: a mensagem de luz na tela cobre esse caso.
+ * Solta os ouvintes da trilha atual. Mora fora da função porque `pararCamera`
+ * também precisa dele.
  */
-async function clarearAteOAlvo(trilha, capacidades) {
-  const temExposicao = Boolean(capacidades.exposureTime);
-  const temBrilho = Boolean(capacidades.brightness);
-  if (!temExposicao && !temBrilho) return;
-
-  const faixa = temExposicao ? capacidades.exposureTime : capacidades.brightness;
-  const propriedade = temExposicao ? 'exposureTime' : 'brightness';
-  const minimo = faixa.min ?? 0;
-  const maximo = faixa.max ?? 0;
-  if (!(maximo > minimo)) return;
-
-  for (let passo = 0; passo < 5; passo++) {
-    const luz = luminanciaDoQuadro();
-    if (!Number.isFinite(luz) || luz >= LUMINANCIA_ALVO) return;
-
-    const ajustes = trilha.getSettings?.() ?? {};
-    const atual = ajustes[propriedade] ?? minimo;
-
-    // Proporcional ao quanto falta, com teto de 2,5x por passo: subir demais de
-    // uma vez estoura a pele, e pele estourada perde a modulação inteira, que é
-    // uma falha pior que a imagem escura.
-    const fator = Math.min(2.5, Math.max(1.2, LUMINANCIA_ALVO / Math.max(luz, 1)));
-    const alvo = Math.min(maximo, Math.max(minimo, atual * fator));
-    if (!(alvo > atual)) return;
-
-    try {
-      await trilha.applyConstraints({ advanced: [{ [propriedade]: alvo }] });
-    } catch {
-      return;
-    }
-    // A mudança leva alguns quadros para aparecer na imagem.
-    await espera(220);
-  }
-}
-
 let soltarVigiaDaFonte = null;
 
 /**
  * Escuta a trilha de vídeo, que é onde a câmera de fato desliga.
  *
  * A cadência percebe que parou de chegar quadro, mas não sabe por quê, e as
- * causas pedem providências diferentes. A trilha sabe, e avisa por três
- * eventos que ninguém estava ouvindo:
+ * causas pedem providências diferentes. A trilha sabe, e avisa por três eventos
+ * que ninguém estava ouvindo:
  *
  * - `mute`: o sistema tirou a câmera de nós sem encerrar a trilha. Acontece
  *   quando outro programa a toma, quando a tampa do notebook fecha, e no
- *   Windows quando a permissão de câmera é revogada com a aba aberta. A trilha
- *   continua viva e pode voltar sozinha, então aqui não se encerra nada.
+ *   Windows quando a permissão é revogada com a aba aberta. A trilha continua
+ *   viva e pode voltar sozinha, então aqui não se encerra nada.
  * - `unmute`: voltou. Vale resgatar na hora, porque o agendamento de quadro
  *   morreu durante o silêncio e nada mais o religa.
- * - `ended`: acabou de vez, e aí não há o que esperar. Cabo desconectado,
+ * - `ended`: acabou de vez, e não há o que esperar. Cabo desconectado,
  *   dispositivo removido.
  *
  * Sem isto a página ficava dizendo "Medindo" sobre uma imagem congelada, que é
@@ -995,6 +1071,7 @@ function vigiarAFonte(fonteDeQuadros) {
   if (!trilha?.addEventListener) return;
 
   const silenciou = () => {
+    registrar('trilha.mute', { rodando });
     if (!rodando) return;
     dizer(
       'O sistema tirou a câmera desta página e ela parou de entregar imagem. '
@@ -1004,11 +1081,13 @@ function vigiarAFonte(fonteDeQuadros) {
     );
   };
   const voltou = () => {
+    registrar('trilha.unmute', { rodando });
     if (!rodando) return;
     dizer('A câmera voltou. Retomando a medição.');
     cadencia?.resgatar();
   };
   const terminou = () => {
+    registrar('trilha.ended', { rodando });
     if (!rodando) return;
     parar();
     dizer(
@@ -1067,6 +1146,91 @@ function pararCamera() {
    impressão de que existe um ajuste capaz de salvar a medição. */
 
 
+
+/* ------------------------------------------------------- diagnóstico -------
+   O que segue existe porque duas correções seguidas erraram o alvo. O relato
+   possível era "a câmera desliga e liga", e dele cabem quatro explicações com
+   providências diferentes: o dispositivo reiniciando por causa de uma mudança
+   de configuração, o agendamento de quadro morrendo, a própria página reabrindo
+   a câmera ao baixar a resolução, e o sistema tomando o aparelho. Nenhuma delas
+   se distingue das outras olhando a tela.
+
+   A pulsação abaixo escreve, de dois em dois segundos, o estado de tudo que
+   importa. Com ela, a diferença entre as quatro aparece na primeira leitura.
+*/
+
+/** Intervalo da pulsação de diagnóstico, em milissegundos. */
+const PULSACAO_MS = 2000;
+let pulsacao = null;
+
+function resumoDosAjustes(ajustes) {
+  if (!ajustes) return {};
+  return {
+    largura: ajustes.width ?? 0,
+    altura: ajustes.height ?? 0,
+    taxa: ajustes.frameRate ?? 0,
+  };
+}
+
+function estadoDaTrilha() {
+  const trilha = fluxo?.getVideoTracks?.()[0];
+  if (!trilha) return 'ausente';
+  return `${trilha.readyState}${trilha.muted ? '/mudo' : ''}${trilha.enabled ? '' : '/desligada'}`;
+}
+
+function pulsar() {
+  if (!rodando) return;
+  const estado = cadencia?.estado;
+  registrar('pulso', {
+    quadros: estado?.quadros ?? 0,
+    resgates: estado?.resgates ?? 0,
+    callback: estado?.usandoCallback ?? false,
+    silencioMs: Math.round(estado?.silencioMs ?? 0),
+    trilha: estadoDaTrilha(),
+    prontoDoVideo: el.video.readyState,
+    videoPausado: el.video.paused,
+    tempoDoVideo: el.video.currentTime,
+    amostras: medidor?.amostras?.length ?? 0,
+    progresso: medidor?.progresso ?? 0,
+    taxa: medidor?.fpsEfetivo ?? 0,
+  });
+}
+
+function ligarPulsacao() {
+  desligarPulsacao();
+  pulsacao = setInterval(pulsar, PULSACAO_MS);
+}
+
+function desligarPulsacao() {
+  if (pulsacao === null) return;
+  clearInterval(pulsacao);
+  pulsacao = null;
+}
+
+/**
+ * Monta o texto do diagnóstico, com o ambiente junto.
+ *
+ * O ambiente importa tanto quanto os eventos: a mesma falha num navegador que
+ * não tem `requestVideoFrameCallback` tem outra causa, e sem o dado isso vira
+ * adivinhação. Nada aqui identifica a pessoa.
+ */
+function textoDoDiagnostico() {
+  const trilha = fluxo?.getVideoTracks?.()[0];
+  return comoTexto({
+    navegador: navigator.userAgent,
+    temCallbackDeQuadro: typeof el.video?.requestVideoFrameCallback === 'function',
+    camera: trilha?.label || '(nenhuma aberta)',
+    ajustes: JSON.stringify(trilha?.getSettings?.() ?? {}),
+    degrau: degrauAtual,
+    algoritmo: el.algoritmo?.value,
+    janelaS: el.janela?.value,
+  });
+}
+
+// Deixa o diagnóstico ao alcance do console também: quem sabe abrir o console
+// não precisa procurar botão, e quem não sabe tem o botão.
+window.cardiocamDiagnostico = textoDoDiagnostico;
+
 /*
   O agendamento dos quadros mora em `cadencia.js`, com os testes dele.
 
@@ -1106,6 +1270,15 @@ function ligarCadencia() {
         O custo é esperar a janela de novo. É o custo certo: medida com buraco
         não vale menos, vale menos que nada.
       */
+      registrar('captura.resgate', {
+        silencioMs: Math.round(silencioMs),
+        usandoCallback: estado.usandoCallback,
+        resgates: estado.resgates,
+        quadros: estado.quadros,
+        prontoDoVideo: el.video.readyState,
+        videoPausado: el.video.paused,
+        trilha: estadoDaTrilha(),
+      });
       medidor?.reiniciar();
       ultimaAnalise = 0;
       el.barra.style.width = '0%';
@@ -1119,6 +1292,7 @@ function ligarCadencia() {
     },
   });
   cadencia.iniciar();
+  ligarPulsacao();
 }
 
 function processarQuadroDaCamera({ tempoS, retrocedeu }) {
@@ -1179,7 +1353,7 @@ function processarQuadroDaCamera({ tempoS, retrocedeu }) {
 
   // Avalia o desempenho sem bloquear o laço: a função sai na hora até ter
   // amostra suficiente, e só então decide.
-  void descerDegrauSeNecessario();
+  void ajustarQualidadeSeNecessario();
 
   // O instante do QUADRO, quando o navegador o fornece. `mediaTime` e o tempo
   // de apresentacao daquele quadro na linha do tempo da midia, e e o carimbo
@@ -1259,12 +1433,12 @@ function processarQuadroDaCamera({ tempoS, retrocedeu }) {
             + 'visível ao redor do rosto, afastando-se um pouco da câmera.',
             'alerta',
           );
-        } else if (Number.isFinite(luz) && luz < 60) {
+        } else if (Number.isFinite(luz) && luz < LUMINANCIA_MINIMA) {
           dizer(
             `Sinal fraco, e a causa mais provável é luz: a pele está medindo `
-            + `${luz.toFixed(0)} de 255 de luminância. Abaixo de 60 o pulso fica `
-            + 'menor que o passo de quantização da câmera. Ponha uma luz de '
-            + 'frente, não atrás.',
+            + `${luz.toFixed(0)} de 255 de luminância. Abaixo de `
+            + `${LUMINANCIA_MINIMA} o pulso fica menor que o passo de `
+            + 'quantização da câmera. Ponha uma luz de frente, não atrás.',
             'alerta',
           );
         } else {
@@ -1281,6 +1455,7 @@ async function comecar() {
   if (abrindo) return;
   abrindo = true;
   cancelado = false;
+  registrar('medicao.inicio', { fonte, degrau: degrauAtual });
   try {
     el.btnIniciar.disabled = true;
     // O botão de parar precisa funcionar durante a abertura, senão não há como
@@ -1389,8 +1564,13 @@ async function comecar() {
       // medindo por uma delas, nenhuma instrução de postura vai salvar o
       // resultado, e insistir em dar dica de iluminação seria desviar do que
       // de fato importa.
+      // A ordem das três mensagens é por quanto cada coisa estraga a medição.
+      // Câmera virtual apaga o sinal inteiro; luz ou taxa insuficientes o
+      // deixam abaixo do ruído; postura é o detalhe que sobra.
+      const limite = limiteDaCaptura();
       if (!avisarSeCameraVirtual()) {
-        dizer('Olhe para a câmera. Você pode se mover, só mantenha a luz estável.');
+        if (limite) dizer(limite.texto, 'alerta');
+        else dizer('Olhe para a câmera. Você pode se mover, só mantenha a luz estável.');
       }
     }
     quadrosParaAvaliarDesempenho = 0;
@@ -1481,10 +1661,12 @@ function mensagemDeErroDeCamera(erro) {
 }
 
 function parar() {
+  registrar('medicao.parada', { quadros: cadencia?.estado.quadros ?? 0 });
   cancelado = true;
   rodando = false;
   cadencia?.parar();
   cadencia = null;
+  desligarPulsacao();
   pararCamera();
   el.palcoVazio.hidden = false;
   el.btnParar.disabled = true;
@@ -1746,6 +1928,28 @@ window.addEventListener('resize', () => {
     desenharOnda(medidor.ultimaAnalise.pulso);
     desenharEspectro(medidor.ultimaAnalise.espectro, medidor.ultimaAnalise.bpm);
   }
+});
+
+/**
+ * Copia a linha do tempo da captura.
+ *
+ * Com confirmação visível no próprio botão, e com saída para `prompt` quando a
+ * área de transferência não está disponível, que é o caso em página servida por
+ * http e em alguns navegadores móveis. Botão que falha em silêncio num momento
+ * em que a pessoa já está irritada com um defeito é o pior tipo de botão.
+ */
+el.btnDiagnostico.addEventListener('click', async () => {
+  const texto = textoDoDiagnostico();
+  const rotulo = el.btnDiagnostico.textContent;
+  try {
+    await navigator.clipboard.writeText(texto);
+    el.btnDiagnostico.textContent = 'Copiado';
+  } catch {
+    window.prompt('Copie o diagnóstico abaixo (Ctrl+C):', texto);
+    el.btnDiagnostico.textContent = rotulo;
+    return;
+  }
+  setTimeout(() => { el.btnDiagnostico.textContent = rotulo; }, 2000);
 });
 
 window.addEventListener('beforeunload', pararCamera);

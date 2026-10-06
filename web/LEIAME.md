@@ -75,6 +75,47 @@ Fora da cadência, `app.js` escuta `mute`, `unmute` e `ended` na trilha de
 vídeo. São os eventos que dizem **por que** parou de chegar quadro, e sem eles
 a página ficava dizendo "Medindo" sobre uma imagem congelada.
 
+## Exposição contra taxa de quadros
+
+`js/exposicao.js` resolve a disputa que fazia a câmera desligar e ligar sozinha.
+A história completa está em [docs/adr/0006](../docs/adr/0006-exposicao-contra-taxa-de-quadros.md);
+o resumo é que a webcam abre com a exposição no máximo, não consegue entregar um
+quadro antes de terminar de expô-lo, e por isso entrega oito quadros por segundo
+**em qualquer resolução**. O aplicativo lia a taxa baixa, concluía que a culpa
+era da resolução, e reabria a câmera para baixá-la. Duas vezes por sessão, sem
+nunca acertar a causa.
+
+A medição que fechou o diagnóstico, numa EMEET SmartCam S600:
+
+| exposição | taxa entregue |
+| ---: | ---: |
+| 5000, o máximo e o padrão dela | 8,0 |
+| 1250 | 8,0 |
+| 625 | 15,9 |
+| 312 | 30,0 |
+
+E 8,0 igual em 1920x1080 e em 320x240, o que descarta banda e processamento.
+
+Agora a taxa mínima define um **teto** de exposição, pela conta `10000 / taxa`
+em unidades de 100 µs, e a procura por luz acontece debaixo dele. A resolução,
+quando precisa mudar, muda na trilha viva com `applyConstraints`: o dispositivo
+não cai, a luz da webcam não pisca, e só a janela de coleta recomeça.
+
+Reproduza com `npm run test:navegador:lenta`, que prende a câmera na exposição
+máxima antes de abrir a página e cobra que ela saia de lá sem reabrir nada.
+
+## Quando algo não funcionar
+
+O botão **Copiar diagnóstico** na página põe na área de transferência a linha do
+tempo da captura: cada abertura de câmera, cada ajuste de exposição, cada
+silêncio, cada mudança de resolução, com o instante de cada um, e uma pulsação
+de dois em dois segundos com a contagem de quadros, a taxa medida e o estado da
+trilha. Nada sai do aparelho sozinho; quem copia é quem está usando.
+
+Isso existe porque três correções seguidas foram publicadas em cima do relato
+"a câmera desliga e liga", e desse relato cabiam quatro explicações com
+providências diferentes. Nenhuma delas se distinguia das outras olhando a tela.
+
 Quando a captura precisa ser resgatada, a janela de coleta recomeça. Meio
 segundo sem quadro são dez amostras faltando a 20 por segundo, e a análise
 espectral trata a série como amostrada uniformemente: com um buraco no meio, o
@@ -88,12 +129,39 @@ cd web
 npm test
 ```
 
-459 casos, sem navegador e sem dependências. Verificam a FFT, o filtro, a
+502 casos, sem navegador e sem dependências. Verificam a FFT, o filtro, a
 estimativa de frequência varrendo de 46 a 196 bpm, os três algoritmos sobre
 séries RGB modeladas fisicamente, a segmentação de pele em sete tons, o
 pipeline completo com um canvas falso que devolve pixels de pele modulados por
-um pulso de frequência conhecida, a cascata de Haar contra o OpenCV e a
-cadência de quadros com relógio e filas de agendamento sob controle.
+um pulso de frequência conhecida, a cascata de Haar contra o OpenCV, a
+cadência de quadros com relógio e filas de agendamento sob controle, e o ajuste
+de exposição contra uma câmera de mentira que arredonda os pedidos para cima
+como a de verdade faz.
+
+### Com navegador
+
+```bash
+npm run test:navegador         # câmera falsa, com pulso de 75 bpm gravado
+npm run test:navegador:real    # a câmera do computador
+npm run test:navegador:lenta   # a câmera presa na exposição máxima
+```
+
+Abrem um Chromium pelo protocolo de depuração, servem a página de `127.0.0.1`,
+apertam o botão e leem o que acontece. O primeiro usa um y4m gerado por
+`ferramentas/gerar_y4m.py` com o mesmo simulador da suíte em Python, então a
+frequência que a página tem de encontrar é conhecida: ela mede 79 para um vídeo
+de 75, com 21,7 dB de relação sinal-ruído sobre catorze janelas.
+
+Estes três não entram no `npm test`, porque dependem de navegador instalado e de
+câmera. São eles que acharam o defeito que três correções sem navegador não
+acharam.
+
+Para investigar uma câmera nova:
+
+```bash
+npm run medir:taxas       # taxa entregue em cada resolução
+npm run medir:exposicao   # taxa entregue em cada tempo de exposição
+```
 
 O porte reproduz o mesmo resultado da versão em Python no cenário decisivo: sob
 interferência de iluminação dentro da banda cardíaca, CHROM e POS acertam e o
