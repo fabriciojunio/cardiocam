@@ -110,6 +110,16 @@ Então o ajuste pede o teto, **lê onde a câmera ficou**, e corta pela metade
 enquanto estiver acima dele, até três vezes. Cortar pela metade garante descer
 um degrau da escada por rodada, qualquer que seja a escada.
 
+E a conferência vale para **toda** escrita de exposição, não só para a que
+pretende descer. A primeira versão deste módulo a punha apenas no ramo que
+desce, e o furo apareceu no teste com a câmera real duas horas depois: com a
+câmera em 625, abaixo do teto de 666, e a sala escura, o ramo que sobe atrás de
+luz pedia exatamente o teto; a câmera arredondava para 1250, o degrau de cima; e
+a captura caía de 15,9 para 8,0 quadros por segundo caçando uma luz que nem
+chegava a ganhar. É o mesmo erro que este ADR documenta, cometido de novo dentro
+do código escrito para impedi-lo, e pego pelo instrumento que a investigação
+tinha acabado de construir.
+
 Essa conferência não mede taxa nenhuma: compara dois números que a câmera
 entrega na hora. Isso importa mais do que parece, porque medir taxa é a parte
 frágil, e foi medido que ela falha: em parte das execuções
@@ -142,6 +152,13 @@ número medido, em vez de reabrir a câmera atrás de uma causa que não existe.
 
 **O custo.** A abertura ficou cerca de dois segundos mais lenta, gastos medindo
 e ajustando. É pago com uma mensagem na tela dizendo o que está acontecendo.
+
+**A taxa que o diagnóstico mostra passou a ser a entregue.** Ela vinha de
+`medidor.fpsEfetivo`, que devolve 30 enquanto não houver dez amostras. É um
+valor de partida razoável para o processamento e uma mentira num diagnóstico:
+ele dizia 30 numa captura rodando a 16, e quem lesse isso procuraria o defeito
+no lugar errado. Agora sai da contagem de quadros entre dois pulsos, e vale
+mesmo sem ninguém na frente da câmera.
 
 **O que esta história ensina sobre o projeto, e vale para a iniciação
 científica.** Três correções seguidas foram publicadas sem uma medição do

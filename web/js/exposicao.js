@@ -281,6 +281,33 @@ export async function equilibrar({
   };
 
   /*
+    Garante que a exposição ficou abaixo do teto, custe quantos pedidos custar.
+
+    Isto existe porque a câmera **arredonda o pedido para cima**.
+    `getCapabilities` desta webcam declara passo de 1,22 unidades, sugerindo
+    ajuste fino, e a escada que ela assume de fato é 5000, 2500, 1250, 625.
+    Pedir 666 devolveu 625 numa execução e 1250 em outra.
+
+    Cortar pela metade garante descer um degrau dessa escada por rodada, e três
+    rodadas cobrem uma escada de oito para um.
+
+    E a conferência não mede taxa nenhuma: compara dois números que a câmera
+    entrega na hora. Isso é de propósito, porque medir taxa é a parte frágil, e
+    foi medido que ela falha: em parte das execuções com navegador,
+    `requestVideoFrameCallback` não disparou nenhuma vez durante a abertura,
+    porque o elemento de vídeo ainda está escondido nesse ponto.
+  */
+  const garantirAbaixoDoTeto = async () => {
+    if (relato.teto === null) return;
+    for (let rodada = 0; rodada < RODADAS_DE_METADE && atual > relato.teto; rodada++) {
+      const anterior = atual;
+      if (!await aplicar(atual / 2)) break;
+      if (atual >= anterior) break;
+    }
+    if (atual > relato.teto) relato.motivo += ', e a câmera não desceu até o necessário';
+  };
+
+  /*
     Um teto só, e ele vem da taxa mínima.
 
     O erro da primeira versão foi tratar luz e taxa como duas decisões que se
@@ -291,31 +318,6 @@ export async function equilibrar({
   if (relato.teto !== null && atual > relato.teto) {
     relato.motivo = 'exposição longa demais para a taxa de quadros mínima';
     await aplicar(relato.teto);
-
-    /*
-      E depois as metades, porque a câmera arredonda para cima.
-
-      O teto calculado é exato quando `exposureTime` está mesmo em passos de 100
-      microssegundos, e `getCapabilities` desta webcam declara passo de 1,22.
-      Mas o que ela aceita de fato é uma escada grossa, de 5000, 2500, 1250,
-      625: pedir 666 devolveu 625 numa execução e 1250 em outra. Então o pedido
-      sozinho não basta, e o que basta é **conferir onde ela ficou**. Cair pela
-      metade garante descer um degrau dessa escada por rodada, e três rodadas
-      cobrem uma escada de oito para um.
-
-      Repare que esta conferência não mede taxa nenhuma: compara dois números
-      que a câmera entrega na hora. Era disso que o ajuste precisava, e a
-      medição de taxa, que às vezes não mede, estava no caminho crítico sem
-      precisar estar.
-    */
-    for (let rodada = 0; rodada < RODADAS_DE_METADE && atual > relato.teto; rodada++) {
-      const anterior = atual;
-      if (!await aplicar(atual / 2)) break;
-      if (atual >= anterior) break;
-    }
-    if (atual > relato.teto) {
-      relato.motivo += ', e a câmera não desceu até o necessário';
-    }
   } else if (Number.isFinite(relato.luz) && relato.luz < luminanciaAlvo && atual > 0) {
     const fator = Math.min(2.5, Math.max(1.2, luminanciaAlvo / Math.max(relato.luz, 1)));
     const desejada = Math.min(atual * fator, relato.teto ?? atual * fator);
@@ -324,6 +326,17 @@ export async function equilibrar({
   } else {
     relato.motivo = 'nada a ajustar';
   }
+
+  /*
+    Depois dos dois ramos, e não dentro de um só.
+
+    Este era o furo: a conferência estava só no ramo que desce. O ramo que sobe
+    atrás de luz pedia exatamente o teto, a câmera arredondava para o degrau de
+    cima, e a captura ia de 15,9 para 8,0 quadros por segundo caçando uma luz
+    que ela nem ganhava. Foi pego pelo teste com a câmera real, duas horas
+    depois de o módulo ter sido escrito para impedir precisamente isso.
+  */
+  await garantirAbaixoDoTeto();
 
   relato.exposicaoDepois = atual;
   relato.luz = luminancia();

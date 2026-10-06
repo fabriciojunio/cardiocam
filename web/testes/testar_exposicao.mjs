@@ -171,6 +171,26 @@ async function ajustar(trilha, { luz = 20, taxaMinima = TAXA_MINIMA } = {}) {
 }
 
 {
+  /*
+    O furo que o teste com câmera real pegou, duas horas depois.
+
+    A conferência do teto estava só no ramo que desce. Com a câmera em 625,
+    abaixo do teto de 666, e a sala escura, o ramo que sobe atrás de luz pedia
+    exatamente o teto; a câmera arredondava para 1250, o degrau de cima; e a
+    captura caía de 15,9 para 8,0 quadros por segundo caçando uma luz que nem
+    chegava a ganhar.
+
+    A lição: **toda** escrita de exposição precisa passar pela conferência, e
+    não só a que tinha a intenção de descer.
+  */
+  const trilha = trilhaFalsa({ exposicao: 625, escada: [625, 1250, 2500, 5000] });
+  const relato = await ajustar(trilha, { luz: 11 });
+  verificar('subir atrás de luz não pode passar do teto',
+    trilha.exposicao <= relato.teto, `ficou em ${trilha.exposicao}, teto ${relato.teto}`);
+  igual('e a câmera volta para o degrau que cabe', trilha.exposicao, 625);
+}
+
+{
   // Já clara: não mexe.
   const trilha = trilhaFalsa({ exposicao: 300 });
   const relato = await ajustar(trilha, { luz: 140 });
