@@ -18,6 +18,7 @@ from cardiocam.avaliacao import (
 from cardiocam.dominio.config import ConfiguracaoAnalise
 from cardiocam.dominio.sinal import BandaCardiaca
 from cardiocam.fontes.arquivo import abrir_arquivo
+from cardiocam.qualidade.persistencia import CAMINHO_PADRAO as CAMINHO_DO_MODELO
 from cardiocam.fontes.sintetica import FonteSintetica, ParametrosSimulacao
 from cardiocam.fontes.webcam import abrir_webcam
 from cardiocam.pipeline.analisador import RelatorioSessao, analisar_fonte
@@ -317,6 +318,28 @@ def _comando_qualidade(argumentos: argparse.Namespace) -> int:
     print(NOVA_LINHA + "## Diagrama de confiabilidade" + NOVA_LINHA)
     print(relatorio.calibracao_no_teste.tabela())
 
+    if argumentos.gravar_modelo:
+        from cardiocam.qualidade.persistencia import Procedencia, agora_em_texto, salvar
+
+        destino = salvar(
+            relatorio.modelo,
+            Procedencia(
+                treinado_em=agora_em_texto(),
+                janelas=len(amostras),
+                bateria=f"{len(cenarios)} cenários, caminho {caminho}",
+                erro_respondendo_sempre=float(relatorio.curva_no_teste.erro_sem_abstencao),
+                erro_com_abstencao=float(relatorio.ponto_adotado.erro_medio),
+                cobertura=float(relatorio.ponto_adotado.cobertura),
+                observacao=(
+                    "Treinado em bateria sintética. O modo de falha medido é o "
+                    "artefato inédito: com um tipo que não estava no treino, o "
+                    "ganho some em cobertura razoável."
+                ),
+            ),
+            argumentos.gravar_modelo,
+        )
+        print(NOVA_LINHA + f"Modelo gravado em {destino}.")
+
     if argumentos.saida:
         partes = [
             "# Abstenção com incerteza calibrada",
@@ -479,6 +502,15 @@ def construir_analisador() -> argparse.ArgumentParser:
             "analítico. Quatro das onze características só variam assim, e são "
             "justamente as que descrevem os modos de falha que o espectro não "
             "vê. Custa duas ordens de grandeza mais caro."
+        ),
+    )
+    qualidade.add_argument(
+        "--gravar-modelo",
+        nargs="?",
+        const=str(CAMINHO_DO_MODELO),
+        help=(
+            "grava o modelo treinado em JSON, para o aplicativo carregar. Sem "
+            "caminho, grava dentro do pacote, que é de onde o executável o lê."
         ),
     )
     qualidade.add_argument("--saida", help="grava o relatório em Markdown")

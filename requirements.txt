@@ -2,3 +2,14 @@ numpy==2.5.2
 scipy==1.18.0
 opencv-python==4.12.0.88
 scikit-learn==1.7.2
+
+# Interface do aplicativo de desktop. O pacote "Essentials" traz Core, Gui e
+# Widgets e deixa de fora WebEngine, Multimedia, 3D e Charts, que este projeto
+# não usa: é cerca de um terço do tamanho do PySide6 completo, e o executável
+# carrega esse peso inteiro.
+PySide6-Essentials==6.11.2
+
+# Captura de tela. Lê um retângulo em pixels físicos sem passar por codec
+# nenhum, que é a propriedade de que a medição depende: qualquer recompressão
+# no caminho destruiria justamente a variação sutil de cor que carrega o pulso.
+mss==10.2.0

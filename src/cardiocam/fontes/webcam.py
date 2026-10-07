@@ -75,6 +75,41 @@ class FonteWebcam:
             time.sleep(0.05)
         return False
 
+    @staticmethod
+    def _ja_esta_em(captura: cv2.VideoCapture, propriedade: int, desejado: float) -> bool:
+        """Se a câmera já entrega esse valor, não há o que pedir."""
+        try:
+            atual = float(captura.get(propriedade))
+        except Exception:  # noqa: BLE001  (backend pode recusar a consulta)
+            return False
+        return atual > 0 and abs(atual - float(desejado)) < 0.5
+
+    def _pedir_formato(self, captura: cv2.VideoCapture) -> None:
+        """Pede resolução e taxa, e **só quando elas já não são as atuais**.
+
+        Esta guarda vale vinte segundos por abertura, medidos. No Media
+        Foundation, que é o primeiro backend no Windows, cada `set` de largura,
+        altura ou taxa renegocia o formato com o dispositivo, e numa EMEET
+        SmartCam S600 cada uma dessas três chamadas custou **6,3 segundos**.
+        Com a construção, a abertura inteira levava 25,6 s.
+
+        O detalhe que torna isso puro desperdício: a câmera **já abria em
+        640x480 a 30 quadros por segundo**, que é exatamente o que estava sendo
+        pedido. Eram dezenove segundos gastos para pedir o que já estava feito.
+
+        Sem os três, a abertura cai para 6,5 s, que é o custo da enumeração do
+        próprio Media Foundation, e a taxa entregue continua 29,9. Trocar para
+        DirectShow abriria em 2,3 s e seria pior: medido na mesma câmera, ele
+        entrega 8 quadros por segundo e não expõe controle de exposição, que é
+        o ajuste que mais afeta a medição.
+        """
+        if not self._ja_esta_em(captura, cv2.CAP_PROP_FRAME_WIDTH, self.largura):
+            captura.set(cv2.CAP_PROP_FRAME_WIDTH, self.largura)
+        if not self._ja_esta_em(captura, cv2.CAP_PROP_FRAME_HEIGHT, self.altura):
+            captura.set(cv2.CAP_PROP_FRAME_HEIGHT, self.altura)
+        if not self._ja_esta_em(captura, cv2.CAP_PROP_FPS, self.fps):
+            captura.set(cv2.CAP_PROP_FPS, self.fps)
+
     def abrir(self) -> Resultado["FonteWebcam"]:
         """Abre a câmera, confirma que ela entrega imagem e ajusta a resolução."""
         ultimo_erro = "a câmera não foi encontrada"
@@ -86,9 +121,7 @@ class FonteWebcam:
                 ultimo_erro = f"o backend {nome_backend} não conseguiu abrir o dispositivo"
                 continue
 
-            captura.set(cv2.CAP_PROP_FRAME_WIDTH, self.largura)
-            captura.set(cv2.CAP_PROP_FRAME_HEIGHT, self.altura)
-            captura.set(cv2.CAP_PROP_FPS, self.fps)
+            self._pedir_formato(captura)
             # Buffer pequeno reduz o atraso entre o que acontece e o que é medido.
             captura.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 

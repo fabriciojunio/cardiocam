@@ -66,24 +66,39 @@ o sistema tenta fazer isso ao abrir a câmera. Muitas webcams não expõem esses
 controles: a usada no desenvolvimento recusa toda tentativa nos dois backends do
 Windows. A correção por fundo funciona independentemente disso.
 
-## Versão web
+## Aplicativo de desktop
 
-**https://cardiocam.vercel.app**
+Um quadrado na tela, com um botão de ligar e desligar, e uma sobreposição num
+canto mostrando a leitura por cima de tudo, no estilo dos painéis de jogo. Fica
+na bandeja e continua medindo com a janela fechada.
 
-Roda no navegador, em computador e celular, sem instalar nada. Quatro fontes:
-rosto pela câmera, **janela de chamada** (Teams, Meet, Zoom, WhatsApp), dedo na
-câmera traseira com a lanterna, e arquivo de vídeo. Guarda as medições por
-pessoa e exporta em CSV.
+```bash
+python -m cardiocam.desktop
+```
 
-Tudo é processado dentro do navegador. Não existe servidor neste projeto, e o
-cabeçalho `Content-Security-Policy` fecha isso com `connect-src 'none'`: ainda
-que algum código tentasse enviar dados para fora, o navegador recusaria a
-conexão. Detalhes e diferenças em relação a esta versão em
-[web/LEIAME.md](web/LEIAME.md).
+Mede de duas origens: a câmera do computador, ou **a janela de uma reunião**
+(Teams, Meet, Zoom, WhatsApp), escolhida numa lista das janelas abertas. Ler a
+janela resolve um problema que não tem outra saída: nenhuma dessas plataformas
+entrega o vídeo dos participantes para programa de fora.
 
-**O rosto é detectado por cascata de Haar, portada para o navegador.** As três
-regiões medidas acompanham a caixa do rosto, e a pessoa pode se mover. Não há
-contorno para encaixar nem linha para alinhar.
+Houve uma versão que rodava no navegador, publicada na Vercel, e ela foi
+**removida em 07/10/2026**. O motivo é de uso, e os três pontos são medidos: o
+navegador congela a aba em segundo plano, então não dá para medir durante a
+reunião; `getDisplayMedia` exige escolher a janela de novo a cada sessão e
+mantém a barra de compartilhamento na tela; e o controle de câmera que o
+navegador expõe é bem mais pobre que o do driver, o que custou um dia inteiro de
+investigação registrado no [ADR 6](docs/adr/0006-exposicao-contra-taxa-de-quadros.md).
+O histórico do Git guarda aquela implementação inteira, com os 502 testes dela.
+
+A ressalva que vale para a reunião, e está dita na tela: o vídeo que chega já
+passou por compressão com subamostragem de croma, e o controle de taxa do codec
+descarta justamente variação sutil em região homogênea, que é a descrição exata
+do pulso. Dá para medir, com relação sinal-ruído bem menor, e exige boa luz e a
+pessoa parada.
+
+**O rosto é detectado por cascata de Haar.** As três regiões medidas acompanham
+a caixa do rosto, e a pessoa pode se mover. Não há contorno para encaixar nem
+linha para alinhar.
 
 O caminho até aqui passou por duas tentativas, e as duas ensinaram algo.
 
@@ -173,7 +188,44 @@ evitam qualquer download em tempo de execução.
 
 ## Uso
 
-Medir pela webcam:
+O jeito normal é o aplicativo:
+
+```bash
+python -m cardiocam.desktop     # ou cardiocam-app, depois de instalar
+```
+
+Um quadrado com um botão. O rodapé mostra de onde está medindo e abre a lista
+das janelas abertas quando clicado. A leitura aparece numa sobreposição no canto
+da tela, que não recebe clique e não atrapalha a reunião embaixo. Fechar a janela
+manda o programa para a bandeja, onde ele continua medindo.
+
+Abrir a câmera leva alguns segundos e a tela diz isso enquanto acontece: medido
+nesta máquina, 7,7 s, que é o custo da enumeração do Media Foundation. O
+aplicativo chega a 28 quadros por segundo depois disso.
+
+**O modelo de qualidade decide junto.** A cada janela, as onze características
+são extraídas dos mesmos quadros que produziram a estimativa, o modelo bayesiano
+devolve a probabilidade de o erro estar dentro de 3 bpm, e abaixo do limiar
+escolhido na calibração o número é recusado em vez de exibido. A sobreposição
+mostra a probabilidade ao lado da relação sinal-ruído, porque são duas coisas
+diferentes: o SNR é a primeira peneira, e o modelo pega o caso que ela deixa
+passar, que é a janela de aparência boa e estimativa errada.
+
+O modelo que acompanha o programa foi treinado em 349 janelas da bateria
+sintética, e leva a própria procedência dentro do arquivo: 8,16 bpm respondendo
+sempre contra 5,39 bpm a 49,2% de cobertura. Retreinar e gravar é um comando:
+
+```bash
+cardiocam qualidade --gravar-modelo
+```
+
+A ressalva está em [Saber quando não medir](#saber-quando-não-medir) e vale
+repetir aqui: o modo de falha medido é o artefato inédito, e medir pela janela de
+uma reunião comprimida é exatamente esse caso. O veredito vale como indicação,
+não como garantia, e por isso a probabilidade aparece na tela em vez de ficar
+escondida atrás de um selo.
+
+A linha de comando continua existindo, e é por ela que se faz o resto:
 
 ```bash
 cardiocam ao-vivo
@@ -369,14 +421,10 @@ pytest -m "not lento"          # pula os testes de vídeo
 pytest --cov=cardiocam         # com cobertura
 ```
 
-São 2.198 casos em Python e 373 no navegador, e nenhum usa simulacro no lugar do
+São 2.212 casos em Python, e nenhum usa simulacro no lugar do
 código real. A estratégia é a mesma em todos os níveis: gerar um sinal cuja
 frequência verdadeira nós escolhemos, rodar o sistema de verdade e conferir o
 que sai.
-
-```bash
-cd web && npm test     # os 373 casos da versão web, em Node
-```
 
 - **Unidade** (1.499 casos): resposta em frequência do filtro medida em dezenas
   de frequências, recuperação de senoides varrendo a banda de 45 a 220 bpm em
@@ -452,10 +500,8 @@ src/cardiocam/
   pipeline/     orquestração e estado da medição
   qualidade/    o modelo que decide se a janela presta, e a abstenção
   ui/           painel sobreposto ao vídeo
+  desktop/      a janela, a sobreposição e o laço de medição
   avaliacao/    benchmark comparativo
-web/
-  js/           porte do processamento para o navegador
-  testes/       502 casos em Node, mais três que dirigem um Chromium
 ```
 
 As dependências apontam sempre para dentro: `dominio` não importa nada do

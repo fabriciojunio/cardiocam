@@ -5,12 +5,15 @@ Uso:
 
 O resultado sai em `dist/Cardiocam.exe`, um arquivo único que roda em qualquer
 Windows sem Python instalado. O tamanho fica na casa de algumas centenas de
-megabytes porque OpenCV, SciPy e NumPy vão junto.
+megabytes porque OpenCV, SciPy, NumPy e Qt vão junto.
+
+O ponto de entrada é o **aplicativo de desktop**, e não a linha de comando: é
+nele que o programa é usado. A linha de comando continua existindo para quem
+tem Python, por `python -m cardiocam`.
 
 Não existe versão equivalente para celular, e a razão é estrutural: OpenCV e
 SciPy compilados para Android ou iOS dariam um trabalho desproporcional, e no
-iOS ainda seria preciso conta paga de desenvolvedor. Para celular o caminho é a
-versão web, que instala na tela inicial e roda igual a um aplicativo.
+iOS ainda seria preciso conta paga de desenvolvedor.
 """
 
 from __future__ import annotations
@@ -42,6 +45,12 @@ def montar_comando() -> list[str]:
     # de caminho em tempo de execução.
     dados_haar = Path(cv2.data.haarcascades)
 
+    separador = ";" if sys.platform.startswith("win") else ":"
+    # O modelo de abstenção precisa ir junto. Ele é um arquivo de dados dentro
+    # do pacote, e o empacotador não leva dado de pacote por conta própria: sem
+    # esta linha o executável sai decidindo pela regra fixa, em silêncio.
+    modelo = RAIZ / "src" / "cardiocam" / "qualidade" / "modelo.json"
+
     return [
         sys.executable,
         "-m",
@@ -51,12 +60,14 @@ def montar_comando() -> list[str]:
         "--onefile",
         "--name",
         NOME,
-        # Console visível de propósito: a interface principal do programa é a
-        # linha de comando, e esconder o console deixaria o usuário sem as
-        # mensagens de erro e sem o resultado final.
-        "--console",
+        # Sem console: a interface é a janela, e um prompt preto abrindo junto
+        # com ela não informa nada a quem clicou no ícone. Erro que antes ia
+        # para o console agora vai para a bandeja, como notificação.
+        "--windowed",
         "--add-data",
-        f"{dados_haar}{';' if sys.platform.startswith('win') else ':'}cv2/data",
+        f"{dados_haar}{separador}cv2/data",
+        "--add-data",
+        f"{modelo}{separador}cardiocam/qualidade",
         "--collect-submodules",
         "scipy",
         "--collect-submodules",
@@ -73,14 +84,24 @@ def montar_comando() -> list[str]:
         "PySide2",
         "--exclude-module",
         "pytest",
+        # O Qt traz módulos pesados que este projeto não usa. Tirar os quatro
+        # corta algumas centenas de megabytes do executável.
+        "--exclude-module",
+        "PySide6.QtWebEngineCore",
+        "--exclude-module",
+        "PySide6.QtWebEngineWidgets",
+        "--exclude-module",
+        "PySide6.QtMultimedia",
+        "--exclude-module",
+        "PySide6.Qt3DCore",
         "--paths",
         str(RAIZ / "src"),
-        str(RAIZ / "src" / "cardiocam" / "__main__.py"),
+        str(RAIZ / "src" / "cardiocam" / "desktop" / "__main__.py"),
     ]
 
 
 def main() -> int:
-    entrada = RAIZ / "src" / "cardiocam" / "__main__.py"
+    entrada = RAIZ / "src" / "cardiocam" / "desktop" / "__main__.py"
     if not entrada.exists():
         print(f"Ponto de entrada não encontrado: {entrada}", file=sys.stderr)
         return 1

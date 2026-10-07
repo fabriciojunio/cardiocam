@@ -30,8 +30,11 @@ jobs:
           cache: pip
 
       - name: Instalar dependências do sistema
-        # O opencv-python precisa dessas bibliotecas mesmo sem interface
-        # gráfica, porque o pacote traz o módulo highgui compilado.
+        # O opencv-python precisa de libgl e libglib mesmo sem interface
+        # gráfica, porque o pacote traz o módulo highgui compilado. As quatro
+        # seguintes são do Qt: mesmo com a plataforma `offscreen`, que desenha
+        # num mapa de bits, o PySide6 carrega as bibliotecas de EGL e de teclado
+        # ao iniciar e falha sem elas.
         #
         # A remoção das listas de terceiros antes do update não é zelo
         # desnecessário: em 05/10/2026 o build quebrou porque
@@ -44,7 +47,7 @@ jobs:
           sudo rm -f /etc/apt/sources.list.d/microsoft*.list
           sudo rm -f /etc/apt/sources.list.d/*azure*.list
           sudo apt-get update
-          sudo apt-get install -y libgl1 libglib2.0-0
+          sudo apt-get install -y libgl1 libglib2.0-0 libegl1 libxkbcommon-x11-0 libdbus-1-3 libxcb-cursor0
 
       - name: Instalar o projeto
         run: pip install -e ".[dev]"
@@ -56,29 +59,6 @@ jobs:
       - name: Rodar o subconjunto rápido
         if: ${{ !matrix.completo }}
         run: pytest -n auto -m "not lento" -p no:cacheprovider
-
-  navegador:
-    # Os testes da versão web não rodavam no CI, e são 386 casos cobrindo o
-    # processamento de sinais em JavaScript, a localização do rosto e a captura
-    # de tela. Rodar a suíte em Python e não a do navegador deixava metade do
-    # projeto sem rede de proteção.
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Conferir identificadores entre HTML e JavaScript
-        # `getElementById` devolve null sem erro, e o erro só aparece no
-        # primeiro addEventListener, derrubando a página inteira. Trinta
-        # segundos de máquina para evitar horas de procura.
-        run: node testes/conferir_ids.mjs
-        working-directory: web
-
-      - name: Rodar a suíte do navegador
-        run: node testes/testar.js
-        working-directory: web
 
   documentacao:
     # A documentação de iniciação científica vai para comitê de ética, e erro
@@ -106,7 +86,7 @@ jobs:
           sudo rm -f /etc/apt/sources.list.d/microsoft*.list
           sudo rm -f /etc/apt/sources.list.d/*azure*.list
           sudo apt-get update
-          sudo apt-get install -y libgl1 libglib2.0-0
+          sudo apt-get install -y libgl1 libglib2.0-0 libegl1 libxkbcommon-x11-0 libdbus-1-3 libxcb-cursor0
       - run: pip install -e .
 
       - name: Medir um pulso simulado de frequência conhecida

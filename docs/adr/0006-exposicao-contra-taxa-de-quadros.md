@@ -1,5 +1,15 @@
 # 6. Exposição contra taxa de quadros, e a câmera que desligava sozinha
 
+> **Nota de 07/10/2026.** A implementação em navegador descrita aqui foi
+> removida do projeto no mesmo dia, e o aplicativo de desktop a substituiu. Este
+> registro continua valendo por dois motivos. O primeiro é que a física medida é
+> da câmera e não do navegador: a exposição no máximo limita a taxa de quadros
+> em qualquer programa, e o aplicativo de desktop herda o mesmo problema e a
+> mesma conta de teto. O segundo é o método, que é o que o documento de fato
+> ensina: três correções publicadas sem medir o fenômeno, e o diagnóstico saindo
+> em três medidas depois que o instrumento foi construído. Decisão não se apaga
+> quando o código muda; se apaga, o projeto perde a memória de por que decidiu.
+
 ## Contexto
 
 O relato foi: "a câmera desliga e liga, e não aparece mais nada". Três correções

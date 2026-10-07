@@ -25,7 +25,7 @@ from cardiocam.fontes.sintetica import ParametrosSimulacao
 from cardiocam.qualidade.coleta_de_video import (
     SATURADO_ALTO,
     SATURADO_BAIXO,
-    _ContextoDaJanela,
+    ContextoDaJanela,
     coletar_de_video,
     fracao_saturada,
 )
@@ -95,20 +95,20 @@ class TestContextoDaJanela:
         janela, e a característica passaria a descrever um passado que a
         estimativa não usou.
         """
-        contexto = _ContextoDaJanela(capacidade=3)
+        contexto = ContextoDaJanela(capacidade=3)
         for valor in (0.1, 0.2, 0.3, 0.9):
             contexto.registrar(valor, 0.0, valor)
         assert len(contexto.pele) == 3
         assert contexto.media_de_pele() == pytest.approx((0.2 + 0.3 + 0.9) / 3)
 
     def test_vazio_nao_levanta(self):
-        contexto = _ContextoDaJanela(capacidade=3)
+        contexto = ContextoDaJanela(capacidade=3)
         assert contexto.media_de_pele() == 0.0
         assert contexto.media_saturada() == 0.0
         assert contexto.deslocamento().size == 0
 
     def test_completo_so_quando_enche(self):
-        contexto = _ContextoDaJanela(capacidade=2)
+        contexto = ContextoDaJanela(capacidade=2)
         assert not contexto.completo
         contexto.registrar(0.5, 0.0, 0.5)
         assert not contexto.completo
