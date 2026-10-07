@@ -278,15 +278,18 @@ def _comando_qualidade(argumentos: argparse.Namespace) -> int:
     """
     from cardiocam.avaliacao.benchmark import cenarios_de_robustez
     from cardiocam.qualidade.coleta import coletar
+    from cardiocam.qualidade.coleta_de_video import coletar_de_video
     from cardiocam.qualidade.treino import treinar
 
     cenarios = cenarios_padrao() + cenarios_de_robustez()
+    caminho = "vídeo, quadro a quadro" if argumentos.com_video else "analítico"
     print(
         f"Coletando janelas de {len(cenarios)} cenários "
-        f"x {len(ALGORITMOS_DISPONIVEIS)} algoritmos. Isso roda o pipeline "
-        f"inteiro e demora." + NOVA_LINHA
+        f"x {len(ALGORITMOS_DISPONIVEIS)} algoritmos pelo caminho {caminho}. "
+        f"Isso roda o pipeline inteiro e demora." + NOVA_LINHA
     )
-    amostras, falhas = coletar(cenarios, agrupar_por=argumentos.agrupar_por)
+    coletora = coletar_de_video if argumentos.com_video else coletar
+    amostras, falhas = coletora(cenarios, agrupar_por=argumentos.agrupar_por)
     print(
         f"{len(amostras)} janelas com estimativa, "
         f"{falhas} recusadas pelo pipeline." + NOVA_LINHA
@@ -467,6 +470,16 @@ def construir_analisador() -> argparse.ArgumentParser:
         default="condicao",
         dest="agrupar_por",
         help="o que não pode aparecer em duas partições ao mesmo tempo",
+    )
+    qualidade.add_argument(
+        "--com-video",
+        action="store_true",
+        help=(
+            "coleta percorrendo o caminho completo, com imagem, em vez do "
+            "analítico. Quatro das onze características só variam assim, e são "
+            "justamente as que descrevem os modos de falha que o espectro não "
+            "vê. Custa duas ordens de grandeza mais caro."
+        ),
     )
     qualidade.add_argument("--saida", help="grava o relatório em Markdown")
     qualidade.set_defaults(funcao=_comando_qualidade)
