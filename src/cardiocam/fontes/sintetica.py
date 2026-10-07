@@ -470,6 +470,9 @@ class FonteSintetica:
             self.parametros.fase,
         )
         self._iluminacao = _distorcao_iluminacao(self._tempos, self.parametros)
+        self._trajetoria = trajetoria(
+            self._tempos, self.parametros.movimento, self.parametros.semente
+        )
 
     @property
     def bpm_verdadeiro(self) -> float:
@@ -508,13 +511,36 @@ class FonteSintetica:
         )
 
     def deslocamento_em(self, indice: int) -> tuple[int, int]:
-        """Posição da cabeça neste quadro, em pixels de deslocamento."""
+        """Posição da cabeça neste quadro, em pixels de deslocamento.
+
+        Soma as duas fontes, e a soma é o conserto de uma duplicata que havia
+        sobrado. O caminho analítico já tinha sido reconciliado com
+        `fontes/movimento.py`, mas **a renderização não**: ela continuava
+        movendo a cabeça por uma senoide de `movimento_px`, enquanto a série
+        analítica usava o ruído de banda de `ParametrosMovimento`. O resultado
+        é que um cenário com `amplitude_px` degradava o sinal e **não mexia a
+        imagem**, então a coleta por vídeo media deslocamento zero num cenário
+        chamado "com movimento".
+
+        Isso importa porque é a coleta por vídeo que existe justamente para
+        exercitar as características de imagem. Com a cabeça parada na tela,
+        ela custa duas ordens de grandeza a mais para entregar a mesma
+        informação que a coleta analítica, que é barata.
+
+        `movimento_px` continua, porque cenários antigos o usam e os números
+        publicados com eles precisam continuar valendo. Com os dois no padrão o
+        deslocamento é zero, como antes.
+        """
         parametros = self.parametros
-        if not parametros.movimento_px:
+        desloca = 0.0
+        if parametros.movimento_px:
+            desloca += parametros.movimento_px * np.sin(
+                2.0 * np.pi * parametros.movimento_hz * self._tempos[indice]
+            )
+        desloca += float(self._trajetoria.deslocamento_cabeca[indice])
+        desloca += float(self._trajetoria.deslocamento_camera[indice])
+        if not desloca:
             return (0, 0)
-        desloca = parametros.movimento_px * np.sin(
-            2.0 * np.pi * parametros.movimento_hz * self._tempos[indice]
-        )
         return (int(round(desloca)), int(round(desloca * 0.4)))
 
     def quadro_em(self, indice: int) -> Quadro:
