@@ -21,6 +21,13 @@ dependencies = [
     "scipy>=1.11",
     "opencv-python>=4.8,<5",
     "scikit-learn>=1.3",
+    # Interface do aplicativo de desktop. O pacote "Essentials" deixa de fora
+    # WebEngine, Multimedia e 3D, que este projeto não usa, e é cerca de um
+    # terço do tamanho do PySide6 completo.
+    "PySide6-Essentials>=6.7",
+    # Captura de tela, sem passar por codec nenhum: qualquer recompressão no
+    # caminho destruiria a variação de cor que carrega o pulso.
+    "mss>=9.0",
 ]
 
 [project.optional-dependencies]
@@ -34,8 +41,18 @@ dev = [
 [project.scripts]
 cardiocam = "cardiocam.cli:main"
 
+[project.gui-scripts]
+# Entrada sem console: clicar no ícone não abre um prompt preto junto.
+cardiocam-app = "cardiocam.desktop.__main__:principal"
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+# O modelo de abstenção acompanha o pacote. Sem isto, `pip install` deixa o
+# arquivo para trás e o programa volta a decidir pela regra fixa em silêncio,
+# que é o pior jeito de perder um recurso: nada falha, só piora.
+"cardiocam.qualidade" = ["modelo.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

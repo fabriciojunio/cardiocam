@@ -54,7 +54,7 @@ cardíaca e ganho diferente por canal:
 | Sem rectificação | 1 de 16 |
 | Com rectificação | 16 de 16 |
 
-O porte para o navegador reproduz o resultado: 0 de 5 sem, 5 de 5 com.
+O porte para o navegador, que existiu até 07/10/2026, reproduzia o resultado: 0 de 5 sem, 5 de 5 com.
 
 ## Consequências
 

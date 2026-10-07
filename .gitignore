@@ -18,12 +18,7 @@ saidas/
 
 # Vercel
 .vercel/
-node_modules/
 
 dist/
 build/
 *.spec
-
-# Vídeo gerado para a câmera falsa do teste de navegador. São mais de 100 MB,
-# e `ferramentas/gerar_y4m.py` o reproduz em segundos.
-*.y4m

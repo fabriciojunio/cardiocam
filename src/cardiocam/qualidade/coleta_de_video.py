@@ -44,8 +44,14 @@ SATURADO_BAIXO = 1
 
 
 @dataclass
-class _ContextoDaJanela:
+class ContextoDaJanela:
     """Acumula o que a imagem mostra, nos quadros que formam uma janela.
+
+    Público porque o aplicativo de desktop usa o mesmo acúmulo para alimentar o
+    modelo de qualidade ao vivo. As características de imagem precisam descrever
+    exatamente os quadros que produziram a estimativa, tanto na bateria quanto
+    na medição de verdade; duas implementações disso seriam duas chances de
+    divergirem em silêncio.
 
     Usa `deque` com tamanho máximo igual à capacidade da janela de sinal, para
     que o contexto descreva **os mesmos quadros** que produziram a estimativa.
@@ -135,7 +141,7 @@ def coletar_de_video(
                 config=config.com(algoritmo=nome),
                 algoritmo=criar_algoritmo(nome),
             )
-            contexto = _ContextoDaJanela(
+            contexto = ContextoDaJanela(
                 capacidade=config.amostras_por_janela(cenario.parametros.fps)
             )
             emitidas = 0

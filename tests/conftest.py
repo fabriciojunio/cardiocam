@@ -9,9 +9,17 @@ construído a 72 bpm.
 
 from __future__ import annotations
 
+import os
+
 import cv2
 import numpy as np
 import pytest
+
+# O Qt desenha num mapa de bits em vez de numa tela. Precisa ser definido antes
+# de qualquer `import PySide6`, e por isso mora aqui e não no arquivo de teste:
+# o conftest é carregado primeiro. Sem isto a suíte abre janelas de verdade na
+# máquina de quem roda, e no CI, que não tem servidor gráfico, ela nem sobe.
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 # O OpenCV paraleliza a detecção internamente. Rodando a suíte com pytest-xdist,
 # cada processo abriria o próprio conjunto de threads e a máquina ficaria com

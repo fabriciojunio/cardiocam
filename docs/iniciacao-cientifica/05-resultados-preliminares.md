@@ -128,7 +128,7 @@ Dois achados aqui, e os dois entram no projeto:
 
 ## 3. Testes automatizados
 
-**2.198 casos em Python e 373 no navegador**, e nenhum usa simulacro no lugar do
+**2.212 casos em Python**, e nenhum usa simulacro no lugar do
 código real. A estratégia é a mesma em todos os níveis: gerar um sinal cuja
 frequência verdadeira foi escolhida por nós, rodar o sistema de verdade e
 conferir o que sai.
