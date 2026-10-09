@@ -289,7 +289,14 @@ class MonitorCardiaco:
         limite_pausa = max(1.0, 2.0 * self.config.passo_s)
         if self._ultimo_instante is not None:
             intervalo = instante - self._ultimo_instante
-            if intervalo <= 0:
+            if intervalo == 0:
+                # Um quadro duplicado é descartado, sem perder os segundos de
+                # sinal válido já coletados. Não inventamos um instante novo.
+                self._invalidar_leitura()
+                estado.codigo_falha = "tempo_nao_monotonico"
+                estado.mensagem = "O instante do quadro foi repetido. Quadro descartado."
+                return estado
+            if intervalo < 0:
                 self.reiniciar()
                 estado.contexto_reiniciado = True
                 estado.codigo_falha = "tempo_nao_monotonico"
@@ -333,6 +340,13 @@ class MonitorCardiaco:
             return estado
 
         estado.caixa = deteccao.desempacotar()
+        if getattr(self.rastreador, "contexto_alterado", False):
+            self.janela.limpar()
+            self.extrator.reiniciar()
+            self._invalidar_leitura()
+            estado.bpm_exibido = None
+            estado.instante_analise = None
+            estado.contexto_reiniciado = True
 
         extracao = self.extrator.extrair(quadro, estado.caixa)
         if extracao.falhou:

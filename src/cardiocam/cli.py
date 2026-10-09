@@ -427,7 +427,8 @@ def construir_analisador() -> argparse.ArgumentParser:
     simular.add_argument("--movimento", type=float, default=0.0)
     simular.add_argument("--mostrar", action="store_true")
     _adicionar_opcoes_analise(simular)
-    simular.set_defaults(funcao=_comando_simular)
+    # A demonstração padrão dura 20 s e precisa conter uma janela completa.
+    simular.set_defaults(funcao=_comando_simular, janela=10.0)
 
     tela = subcomandos.add_parser(
         "tela",

@@ -457,6 +457,12 @@ def test_janela_padrao_da_linha_de_comando() -> None:
     assert construir_analisador().parse_args(["ao-vivo"]).janela == 25.0
 
 
+def test_simulacao_padrao_tem_tempo_para_medir():
+    opcoes = construir_analisador().parse_args(["simular"])
+    assert opcoes.janela < opcoes.duracao
+    assert construir_analisador().parse_args(["arquivo", "video.mp4"]).janela == 25.0
+
+
 def test_comando_avaliar_imprime_tabela(capsys) -> None:
     assert main(["avaliar"]) == 0
     saida = capsys.readouterr().out

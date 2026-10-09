@@ -50,8 +50,7 @@ def test_falha_da_proxima_janela_remove_bpm_e_analise(monitor, monkeypatch):
     assert "iluminação" not in estado.mensagem
 
 
-@pytest.mark.parametrize("instante,codigo", [(2.95, "tempo_nao_monotonico"),
-                                              (2.0, "tempo_nao_monotonico"),
+@pytest.mark.parametrize("instante,codigo", [(2.0, "tempo_nao_monotonico"),
                                               (float("nan"), "tempo_invalido")])
 def test_tempo_invalido_descarta_leitura(monitor, instante, codigo):
     medidor, quadro, _ = monitor
@@ -68,6 +67,18 @@ def test_pausa_inicia_nova_janela(monitor):
     assert estado.bpm_exibido is None
     assert len(medidor.janela) == 1
     assert estado.contexto_reiniciado
+
+
+def test_quadro_duplicado_e_descartado_sem_perder_sinal_valido(monitor):
+    medidor, quadro, _ = monitor
+    quantidade = len(medidor.janela)
+    estado = medidor.processar(quadro, 2.95)
+    assert estado.bpm_exibido is None
+    assert estado.codigo_falha == "tempo_nao_monotonico"
+    assert len(medidor.janela) == quantidade
+    assert not estado.contexto_reiniciado
+    medidor.processar(quadro, 3.0)
+    assert medidor.janela.serie(False).instantes[-1] == 3.0
 
 
 def test_idade_da_leitura_e_nova_analise(monitor):

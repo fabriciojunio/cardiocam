@@ -62,6 +62,7 @@ class RastreadorRosto:
         self._quadros_sem_rosto = 0
         self._contador = 0
         self._deteccoes_rejeitadas = 0
+        self.contexto_alterado = False
 
     @property
     def caixa_atual(self) -> Retangulo | None:
@@ -87,6 +88,7 @@ class RastreadorRosto:
         self._caixa = None
         self._quadros_sem_rosto = 0
         self._contador = 0
+        self.contexto_alterado = False
 
     def _e_salto_absurdo(self, nova: Retangulo) -> bool:
         if self._caixa is None:
@@ -103,6 +105,7 @@ class RastreadorRosto:
 
     def atualizar(self, quadro: np.ndarray) -> Resultado[Retangulo]:
         """Processa mais um quadro e devolve a caixa estabilizada."""
+        self.contexto_alterado = False
         rodar_detector = (self._contador % self.intervalo_deteccao == 0) or self._caixa is None
         self._contador += 1
 
@@ -125,6 +128,11 @@ class RastreadorRosto:
             self._quadros_sem_rosto += 1
             if self._caixa is not None and not self.perdeu_o_rosto:
                 return Ok(self._caixa)
+
+            # Uma detecção distante persistente passa a ser um novo alvo.
+            # Não interpola nem mistura o sinal desse alvo com o anterior.
+            self._caixa = None
+            self.contexto_alterado = True
 
         self._quadros_sem_rosto = 0
         if self._caixa is None:
