@@ -28,7 +28,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from cardiocam.qualidade.caracteristicas import Caracteristicas, extrair
+from cardiocam.qualidade.caracteristicas import Caracteristicas
+from cardiocam.qualidade.extracao import caracteristicas_da_analise
 from cardiocam.qualidade.coleta_de_video import ContextoDaJanela, fracao_saturada
 from cardiocam.qualidade.persistencia import Procedencia, carregar_se_houver
 from cardiocam.qualidade.treino import ModeloDeQualidade
@@ -65,6 +66,13 @@ class JuizDeQualidade:
         self.modelo: ModeloDeQualidade | None = carregado[0] if carregado else None
         self.procedencia: Procedencia | None = carregado[1] if carregado else None
         self.contexto = ContextoDaJanela(capacidade=max(1, capacidade_da_janela))
+        self._analise_julgada = None
+        self._veredito: Veredito | None = None
+
+    def reiniciar(self) -> None:
+        self.contexto.limpar()
+        self._analise_julgada = None
+        self._veredito = None
 
     @property
     def disponivel(self) -> bool:
@@ -77,6 +85,8 @@ class JuizDeQualidade:
         emitem janela: as características de imagem descrevem o conjunto de
         quadros que formou a estimativa, e não o último deles.
         """
+        if getattr(estado, "contexto_reiniciado", False):
+            self.reiniciar()
         if estado.amostra is None or estado.caixa is None:
             return
         largura = quadro.shape[1] or 1
@@ -87,15 +97,7 @@ class JuizDeQualidade:
         )
 
     def caracteristicas(self, analise) -> Caracteristicas:
-        return extrair(
-            pulso=analise.pulso,
-            espectro=analise.espectro,
-            frequencia_hz=analise.estimativa.frequencia_hz,
-            snr_db=analise.estimativa.snr_db,
-            fracao_de_pele=self.contexto.media_de_pele(),
-            fracao_saturada=self.contexto.media_saturada(),
-            posicoes_roi=self.contexto.deslocamento(),
-        )
+        return caracteristicas_da_analise(analise, contexto=self.contexto)
 
     def julgar(self, analise) -> Veredito | None:
         """Probabilidade de a estimativa estar dentro da tolerância.
@@ -106,14 +108,19 @@ class JuizDeQualidade:
         """
         if self.modelo is None or analise is None:
             return None
+        if analise is self._analise_julgada:
+            return self._veredito
+        self._analise_julgada = analise
+        self._veredito = None
         try:
             probabilidade = self.modelo.probabilidade(self.caracteristicas(analise))
         except (ValueError, FloatingPointError):
             return None
         if not np.isfinite(probabilidade):
             return None
-        return Veredito(
+        self._veredito = Veredito(
             probabilidade=float(probabilidade),
             limiar=float(self.modelo.limiar),
             tolerancia_bpm=float(self.modelo.tolerancia_bpm),
         )
+        return self._veredito

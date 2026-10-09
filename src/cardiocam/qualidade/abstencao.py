@@ -28,6 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from scipy.integrate import trapezoid
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +73,7 @@ class CurvaDeAbstencao:
         valido = np.isfinite(erros)
         if int(np.sum(valido)) < 2:
             return float("nan")
-        return float(np.trapezoid(erros[valido], coberturas[valido]))
+        return float(trapezoid(erros[valido], coberturas[valido]))
 
     def em_cobertura(self, alvo: float) -> Ponto | None:
         """O ponto de maior cobertura que ainda não passa do alvo.

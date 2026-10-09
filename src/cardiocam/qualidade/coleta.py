@@ -24,48 +24,13 @@ o erro marcado pelo teto declarado em `ERRO_DE_FALHA_BPM`.
 
 from __future__ import annotations
 
-import numpy as np
-
 from cardiocam.avaliacao.benchmark import Cenario, cenarios_padrao
 from cardiocam.dominio.config import ConfiguracaoAnalise
 from cardiocam.fontes.sintetica import gerar_serie_rgb
 from cardiocam.pipeline.analisador import estimar_de_serie
-from cardiocam.qualidade.caracteristicas import extrair
+from cardiocam.qualidade.extracao import caracteristicas_da_analise
 from cardiocam.qualidade.treino import Amostra
 from cardiocam.rppg import ALGORITMOS_DISPONIVEIS, criar_algoritmo
-
-def caracteristicas_da_analise(analise, serie=None) -> Caracteristicas:
-    """Extrai o vetor de uma análise que já rodou.
-
-    O contexto de imagem vem da série quando ela existe. Em série RGB pura não
-    há máscara de pele nem posição de região, então esses campos ficam no
-    neutro documentado em `caracteristicas.extrair`.
-    """
-    fundo = None
-    if serie is not None and getattr(serie, "fundo", None) is not None:
-        # Canal verde do fundo: é onde o pulso apareceria se houvesse, e por
-        # isso é a comparação certa para detectar acoplamento de iluminação.
-        # A matriz é 3xN, então o verde é a LINHA 1, não a coluna.
-        fundo = np.asarray(serie.fundo, dtype=float)[1, :]
-        if fundo.size != len(analise.pulso):
-            # O algoritmo pode encurtar a série; alinha pelo fim, que é o
-            # trecho que o espectro de fato enxergou.
-            fundo = (
-                fundo[-len(analise.pulso) :]
-                if fundo.size > len(analise.pulso)
-                else None
-            )
-
-    return extrair(
-        pulso=analise.pulso,
-        espectro=analise.espectro,
-        frequencia_hz=analise.estimativa.frequencia_hz,
-        snr_db=analise.estimativa.snr_db,
-        sinal_do_fundo=fundo,
-        serie_rgb=None if serie is None else serie.como_matriz(),
-        instantes=None if serie is None else serie.instantes,
-    )
-
 
 def coletar(
     cenarios: list[Cenario] | None = None,
