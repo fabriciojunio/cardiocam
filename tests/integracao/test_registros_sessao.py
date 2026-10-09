@@ -119,3 +119,20 @@ def test_registro_preserva_taxa_temporal_e_diagnostico_da_pele(tmp_path):
     assert float(linha["jitter_intervalos_s"]) == pytest.approx(.025)
     assert float(linha["luminancia_pele_mediana_quadro"]) == 45
     assert float(linha["fracao_pele_quadro"]) == .7
+
+
+def test_arquivo_e_fechado_quando_a_analise_falha(monkeypatch):
+    from types import SimpleNamespace
+    from cardiocam.dominio.resultado import Ok
+
+    fechamentos = []
+    fonte = SimpleNamespace(fps=30, fechar=lambda: fechamentos.append(True))
+    monkeypatch.setattr("cardiocam.cli.abrir_arquivo", lambda *a: Ok(fonte))
+
+    def falhar(*args):
+        raise ValueError("falha controlada")
+
+    monkeypatch.setattr("cardiocam.cli.analisar_fonte", falhar)
+    with pytest.raises(ValueError, match="falha controlada"):
+        main(["arquivo", "sessão.mp4"])
+    assert fechamentos == [True]

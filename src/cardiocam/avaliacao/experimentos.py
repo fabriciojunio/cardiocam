@@ -27,6 +27,8 @@ def avaliar_experimentais(cenarios=None):
 
 
 def principal(cenarios=None):
+    from cardiocam.__main__ import _preparar_console
+    _preparar_console()
     print("Avaliação experimental em dados sintéticos; sem validação em pessoas reais.")
     print(formatar_tabela(avaliar_experimentais(cenarios)))
 

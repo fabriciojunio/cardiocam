@@ -1,8 +1,11 @@
 """A distribuição preserva arquivos e inclui os recursos de medição."""
 
 import importlib.util
+import os
 from pathlib import Path
 from types import SimpleNamespace
+import subprocess
+import sys
 
 
 def script():
@@ -43,3 +46,12 @@ def test_sucesso_explica_interface_correta(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(modulo.tempfile, "mkdtemp", lambda **kw: str(tmp_path / "construção"))
     assert modulo.main(["--saida", str(tmp_path)]) == 0
     assert "escolha a origem" in capsys.readouterr().out
+
+
+def test_instrucoes_de_empacotamento_usam_utf8(tmp_path):
+    caminho = Path(__file__).resolve().parents[2] / "empacotar.py"
+    resultado = subprocess.run([sys.executable, "-B", str(caminho), "--help"],
+                               cwd=tmp_path, env={**os.environ, "PYTHONIOENCODING": "cp1252"},
+                               capture_output=True, timeout=20)
+    assert resultado.returncode == 0
+    assert "executável" in resultado.stdout.decode("utf-8")

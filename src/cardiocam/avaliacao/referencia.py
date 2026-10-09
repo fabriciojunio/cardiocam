@@ -24,6 +24,8 @@ class MetricasDeReferencia:
     vies_bpm: float | None
     limite_inferior_bpm: float | None
     limite_superior_bpm: float | None
+    proporcao_dentro_5_bpm: float | None
+    proporcao_aceitas_com_erro_acima_5_bpm: float | None
 
 
 def ler_referencia(caminho):
@@ -63,10 +65,6 @@ def avaliar_csv(leituras, referencia, offset_s=0.0, lacuna_maxima_s=2.0):
         instante = float(linha["instante_s"]) + offset_s
         if not np.isfinite(instante):
             raise ValueError("Uma leitura tem instante inválido.")
-        verdade = valor_referencia(tempos, bpm, instante, lacuna_maxima_s)
-        if verdade is None:
-            continue
-        com_referencia += 1
         aceita = linha["aceita"].strip().lower()
         if aceita not in ("true", "false"):
             raise ValueError("A coluna aceita precisa conter True ou False.")
@@ -74,6 +72,11 @@ def avaliar_csv(leituras, referencia, offset_s=0.0, lacuna_maxima_s=2.0):
             estimativa = float(linha["bpm"])
             if not np.isfinite(estimativa) or estimativa <= 0:
                 raise ValueError("Uma leitura aceita tem BPM inválido.")
+        verdade = valor_referencia(tempos, bpm, instante, lacuna_maxima_s)
+        if verdade is None:
+            continue
+        com_referencia += 1
+        if aceita == "true":
             erros.append(estimativa - verdade)
     vies = float(np.mean(erros)) if erros else None
     desvio = float(np.std(erros, ddof=1)) if len(erros) > 1 else None
@@ -83,6 +86,8 @@ def avaliar_csv(leituras, referencia, offset_s=0.0, lacuna_maxima_s=2.0):
         float(np.sqrt(np.mean(np.square(erros)))) if erros else None, vies,
         vies - 1.96 * desvio if desvio is not None else None,
         vies + 1.96 * desvio if desvio is not None else None,
+        float(np.mean(np.abs(erros) <= 5)) if erros else None,
+        float(np.mean(np.abs(erros) > 5)) if erros else None,
     )
 
 
@@ -108,7 +113,9 @@ def avaliar_manifesto(caminho):
 
 
 def principal():
-    argumentos = argparse.ArgumentParser(description="Avalia leituras contra ECG ou PPG sincronizado.")
+    from cardiocam.__main__ import _preparar_console
+    _preparar_console()
+    argumentos = argparse.ArgumentParser(description="Avalia leituras contra referência sincronizada de ECG ou PPG.")
     argumentos.add_argument("manifesto")
     argumentos.add_argument("--saida", required=True)
     opcoes = argumentos.parse_args()
