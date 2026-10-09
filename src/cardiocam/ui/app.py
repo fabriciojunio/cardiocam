@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import time
+import csv
+from collections import deque
 from dataclasses import dataclass
 
 import cv2
@@ -13,6 +15,8 @@ from cardiocam.pipeline.analisador import MonitorCardiaco, RelatorioSessao
 from cardiocam.rppg import ALGORITMOS_DISPONIVEIS, criar_algoritmo
 from cardiocam.ui.hud import compor
 from cardiocam.ui.texto import PincelTexto
+from cardiocam.pipeline.registros import RegistroMedicao
+from cardiocam.desktop.qualidade_ao_vivo import JuizDeQualidade, aplicar_qualidade
 
 TITULO_JANELA = "Cardiocam"
 
@@ -40,6 +44,8 @@ def executar(
     config = config or ConfiguracaoAnalise()
     monitor = MonitorCardiaco(fps=getattr(fonte, "fps", 30.0) or 30.0, config=config)
     pincel = PincelTexto()
+    juiz = JuizDeQualidade(monitor.janela.capacidade, caminho_modelo=config.modelo_qualidade)
+    registros = deque(maxlen=3600)
 
     relatorio = RelatorioSessao()
     inicio = time.perf_counter()
@@ -54,6 +60,10 @@ def executar(
                 break
 
             estado = monitor.processar(quadro, instante)
+            aplicar_qualidade(juiz, quadro, estado)
+            if (estado.janela_emitida or (estado.codigo_falha is not None
+                    and (not registros or registros[-1].codigo_falha != estado.codigo_falha))):
+                registros.append(RegistroMedicao.do_estado(estado))
             quadros += 1
             relatorio.quadros_processados += 1
             if estado.tem_rosto:
@@ -80,6 +90,8 @@ def executar(
     duracao = time.perf_counter() - inicio
     relatorio.estimativas = monitor.historico
     relatorio.ultima_analise = monitor.ultima_analise
+    relatorio.registros = list(registros)
+    relatorio.historico_limitado = monitor.total_estimativas > len(monitor.historico)
 
     return ResultadoSessao(
         relatorio=relatorio,
@@ -91,14 +103,31 @@ def executar(
 def salvar_serie(caminho: str, relatorio: RelatorioSessao) -> None:
     """Grava as estimativas em CSV.
 
-    Só números: instante, BPM, relação sinal-ruído, confiança e algoritmo.
-    Nenhum quadro de vídeo é gravado em momento algum.
+    Inclui medições, recusas e diagnóstico textual, sem quadros de vídeo.
     """
-    linhas = ["janela,bpm,frequencia_hz,snr_db,confianca,algoritmo"]
-    for indice, estimativa in enumerate(relatorio.estimativas):
-        linhas.append(
-            f"{indice},{estimativa.bpm:.3f},{estimativa.frequencia_hz:.5f},"
-            f"{estimativa.snr_db:.3f},{estimativa.confianca.value},{estimativa.algoritmo}"
-        )
-    with open(caminho, "w", encoding="utf-8") as arquivo:
-        arquivo.write("\n".join(linhas) + "\n")
+    registros = relatorio.registros or [
+        RegistroMedicao(None, e, e.aproveitavel, None, None, "", None)
+        for e in relatorio.estimativas
+    ]
+    with open(caminho, "w", encoding="utf-8", newline="") as arquivo:
+        escritor = csv.writer(arquivo)
+        escritor.writerow(["janela", "bpm", "frequencia_hz", "snr_db", "confianca", "algoritmo",
+                           "instante_s", "aceita", "qualidade", "codigo_falha", "mensagem",
+                           "idade_analise_s", "caracteristicas_ausentes", "historico_limitado",
+                           "luminancia_pele_p05_quadro", "luminancia_pele_mediana_quadro",
+                           "luminancia_pele_p95_quadro", "fracao_pele_quadro", "fracao_saturada_quadro",
+                           "fps_janela", "jitter_intervalos_s"])
+        for indice, registro in enumerate(registros):
+            e = registro.estimativa
+            escritor.writerow([
+                indice, "" if e is None else f"{e.bpm:.3f}",
+                "" if e is None else f"{e.frequencia_hz:.5f}",
+                "" if e is None else f"{e.snr_db:.3f}",
+                "" if e is None else e.confianca.value, "" if e is None else e.algoritmo,
+                registro.instante, registro.aceita, registro.qualidade, registro.codigo_falha,
+                registro.mensagem, registro.idade_analise_s,
+                ";".join(registro.caracteristicas_ausentes), relatorio.historico_limitado,
+                registro.luminancia_pele_p05_quadro, registro.luminancia_pele_mediana_quadro,
+                registro.luminancia_pele_p95_quadro, registro.fracao_pele_quadro,
+                registro.fracao_saturada_quadro, registro.fps_janela, registro.jitter_intervalos_s,
+            ])

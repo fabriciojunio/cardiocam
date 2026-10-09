@@ -1,0 +1,15 @@
+{
+  "sessoes": [
+    {
+      "participante": "sintetico-p01",
+      "dispositivo": "nenhum: exemplo numérico",
+      "condicao": "exemplo sintético, sem pessoas",
+      "dataset": "exemplo interno do Cardiocam",
+      "licenca": "MIT; números sintéticos criados para demonstrar o formato",
+      "leituras": "leituras-sinteticas.csv",
+      "referencia": "referencia-sintetica.csv",
+      "offset_s": 0.0,
+      "lacuna_maxima_s": 2.0
+    }
+  ]
+}

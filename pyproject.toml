@@ -25,12 +25,13 @@ dependencies = [
     # WebEngine, Multimedia e 3D, que este projeto não usa, e é cerca de um
     # terço do tamanho do PySide6 completo.
     "PySide6-Essentials>=6.7",
-    # Captura de tela, sem passar por codec nenhum: qualquer recompressão no
-    # caminho destruiria a variação de cor que carrega o pulso.
+    # Captura de tela sem acrescentar uma nova etapa de codificação. O vídeo
+    # recebido ainda pode ter perdas causadas pela compressão da reunião.
     "mss>=9.0",
 ]
 
 [project.optional-dependencies]
+pesquisa = ["torch>=2.6", "onnx>=1.16"]
 dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",
@@ -59,6 +60,7 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-q --strict-markers"
 markers = [
+    "pesquisa_neural: exige dependências optativas e executa redes em CPU",
     "lento: testes que processam vídeo completo e demoram mais",
     "camera: exige webcam física, desativado por padrão",
 ]
@@ -69,9 +71,9 @@ branch = true
 omit = [
     # Fronteiras com hardware e com o sistema gráfico. Estes três módulos só
     # executam de verdade com câmera física, tela e servidor gráfico presentes,
-    # nada disso existe na integração contínua, e cobri-los com simulacros
-    # mediria o simulacro e não o código. Ficam de fora da meta em vez de
-    # inflar o número com testes que não provam nada.
+    # a disponibilidade varia na integração contínua. Testes com APIs
+    # controladas exercitam falhas, mas não verificam o dispositivo físico.
+    # As exclusões fazem parte do denominador declarado da meta de cobertura.
     "src/cardiocam/fontes/webcam.py",
     "src/cardiocam/fontes/tela.py",
     "src/cardiocam/ui/app.py",

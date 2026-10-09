@@ -428,19 +428,21 @@ def test_algoritmo_invalido_e_recusado() -> None:
 
 
 @pytest.mark.parametrize("bpm", (55.0, 72.0, 100.0))
-def test_comando_simular_roda_de_ponta_a_ponta(bpm: float, capsys) -> None:
+def test_comando_simular_roda_de_ponta_a_ponta(bpm: float, capsys, tmp_path) -> None:
     # A janela vai explícita para o teste não quebrar quando o padrão mudar. O
     # que ele verifica é o caminho de ponta a ponta, não o valor do padrão.
     codigo = main(
         [
             "simular", "--bpm", str(bpm), "--duracao", "22",
             "--janela", "15", "--algoritmo", "pos",
+            "--erro-maximo", "3", "--salvar", str(tmp_path / "leituras.csv"),
         ]
     )
     assert codigo == 0
     saida = capsys.readouterr().out
     assert "Frequência cardíaca" in saida
     assert "Erro absoluto" in saida
+    assert "instante_s,aceita" in (tmp_path / "leituras.csv").read_text(encoding="utf-8")
 
 
 def test_video_mais_curto_que_a_janela_avisa_o_motivo(capsys) -> None:
@@ -455,6 +457,12 @@ def test_janela_padrao_da_linha_de_comando() -> None:
     """A janela padrão de 25 s foi escolhida por medição em rosto real: passar
     de 15 para 25 derrubou a dispersão entre janelas de 8,7 para 3,2 bpm."""
     assert construir_analisador().parse_args(["ao-vivo"]).janela == 25.0
+
+
+def test_simulacao_padrao_tem_tempo_para_medir():
+    opcoes = construir_analisador().parse_args(["simular"])
+    assert opcoes.janela < opcoes.duracao
+    assert construir_analisador().parse_args(["arquivo", "video.mp4"]).janela == 25.0
 
 
 def test_comando_avaliar_imprime_tabela(capsys) -> None:

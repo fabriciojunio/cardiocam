@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Iterator
 
@@ -52,17 +53,21 @@ class FonteArquivo:
             raise RuntimeError("O arquivo precisa ser aberto antes de ler quadros.")
 
         indice = 0
+        ultimo_instante = -1.0
         while True:
-            posicao_ms = self._captura.get(cv2.CAP_PROP_POS_MSEC)
             capturou, quadro = self._captura.read()
             if not capturou or quadro is None:
                 break
+            posicao_ms = self._captura.get(cv2.CAP_PROP_POS_MSEC)
             # Alguns contêineres não preenchem a posição em milissegundos;
             # nesse caso caímos no tempo nominal.
-            if posicao_ms and posicao_ms > 0:
+            if posicao_ms is not None and math.isfinite(posicao_ms) and posicao_ms >= 0:
                 instante = float(posicao_ms) / 1000.0
             else:
                 instante = indice / self.fps
+            if instante <= ultimo_instante:
+                instante = max(indice / self.fps, ultimo_instante + 1.0 / self.fps)
+            ultimo_instante = instante
             indice += 1
             yield quadro, instante
 
