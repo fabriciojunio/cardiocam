@@ -101,6 +101,11 @@ def montar_comando(saida: Path, trabalho: Path) -> list[str]:
 
 
 def main(argumentos: list[str] | None = None) -> int:
+    for fluxo in (sys.stdout, sys.stderr):
+        try:
+            fluxo.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):
+            pass
     analisador = argparse.ArgumentParser(description=__doc__)
     analisador.add_argument("--saida", type=Path, default=RAIZ / "dist",
                            help="pasta para o executável; outros arquivos são preservados")

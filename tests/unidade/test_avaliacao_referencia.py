@@ -25,6 +25,8 @@ def test_erro_cobertura_e_limites_sao_calculados(arquivos):
     assert resultado.rmse_bpm == 2
     assert resultado.vies_bpm == 0
     assert resultado.limite_superior_bpm == pytest.approx(1.96 * 8 ** .5)
+    assert resultado.proporcao_dentro_5_bpm == 1
+    assert resultado.proporcao_aceitas_com_erro_acima_5_bpm == 0
 
 
 def test_lacuna_na_referencia_nao_e_interpolada(arquivos):
@@ -75,3 +77,19 @@ def test_comando_grava_json_com_acentuacao_e_sem_nan(arquivos, tmp_path, monkeyp
     assert "câmera" in texto
     assert "NaN" not in texto
     assert json.loads(texto)["participantes"] == 1
+
+
+@pytest.mark.parametrize("bpm,aceita", [("nan", "True"), ("60", "talvez")])
+def test_leitura_invalida_e_recusada_mesmo_fora_da_referencia(arquivos, bpm, aceita):
+    leituras, ref = arquivos
+    leituras.write_text(f"instante_s,bpm,aceita\n99,{bpm},{aceita}\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        avaliar_csv(leituras, ref)
+
+
+def test_proporcao_de_erro_acima_da_tolerancia(arquivos):
+    leituras, ref = arquivos
+    leituras.write_text("instante_s,bpm,aceita\n0,60,True\n1,66,True\n2,200,False\n", encoding="utf-8")
+    resultado = avaliar_csv(leituras, ref)
+    assert resultado.proporcao_dentro_5_bpm == .5
+    assert resultado.proporcao_aceitas_com_erro_acima_5_bpm == .5
