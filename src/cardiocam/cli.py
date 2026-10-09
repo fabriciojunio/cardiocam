@@ -26,6 +26,13 @@ from cardiocam.rppg import ALGORITMOS_DISPONIVEIS
 from cardiocam.ui.app import executar, salvar_serie
 
 
+def _nao_negativo_finito(valor: str) -> float:
+    numero = float(valor)
+    if not np.isfinite(numero) or numero < 0:
+        raise argparse.ArgumentTypeError("Informe um número finito maior ou igual a zero.")
+    return numero
+
+
 def _configuracao(argumentos: argparse.Namespace) -> ConfiguracaoAnalise:
     return ConfiguracaoAnalise(
         janela_s=argumentos.janela,
@@ -36,6 +43,22 @@ def _configuracao(argumentos: argparse.Namespace) -> ConfiguracaoAnalise:
 
 
 def _resumir(relatorio: RelatorioSessao) -> str:
+    if relatorio.registros:
+        aceitas = [registro for registro in relatorio.registros
+                   if registro.aceita and registro.estimativa is not None]
+        linhas = [f"Janelas analisadas: {relatorio.total_estimativas}",
+                  f"Leituras aceitas: {len(aceitas)}",
+                  f"Quadros com rosto: {relatorio.taxa_deteccao * 100:.0f}%"]
+        if not aceitas:
+            motivos = sorted({registro.mensagem for registro in relatorio.registros
+                              if registro.mensagem})
+            return "Nenhuma leitura foi aceita pela avaliação de qualidade.\n" + "\n".join(linhas + motivos)
+        valores = np.asarray([registro.estimativa.bpm for registro in aceitas])
+        return "\n".join([
+            f"Frequência cardíaca: {np.median(valores):.1f} bpm",
+            f"Dispersão entre janelas aceitas: {np.std(valores):.2f} bpm",
+            *linhas,
+        ])
     if relatorio.total_estimativas == 0:
         return (
             "Nenhuma janela produziu estimativa aproveitável.\n"
@@ -112,8 +135,10 @@ def _comando_arquivo(argumentos: argparse.Namespace) -> int:
         sessao = executar(fonte, _configuracao(argumentos))
         relatorio = sessao.relatorio
     else:
-        relatorio = analisar_fonte(fonte, _configuracao(argumentos))
-        fonte.fechar()
+        try:
+            relatorio = analisar_fonte(fonte, _configuracao(argumentos))
+        finally:
+            fonte.fechar()
 
     print()
     print(_resumir(relatorio))
@@ -150,7 +175,15 @@ def _comando_simular(argumentos: argparse.Namespace) -> int:
     if relatorio.total_estimativas:
         erro = abs(relatorio.bpm_mediano - argumentos.bpm)
         print(f"Valor verdadeiro: {argumentos.bpm:.1f} bpm")
-        print(f"Erro absoluto: {erro:.2f} bpm")
+        print(f"Erro absoluto: {erro:.2f} bpm (estimativas brutas, diagnóstico)")
+    else:
+        erro = float("inf")
+    if argumentos.salvar:
+        salvar_serie(argumentos.salvar, relatorio)
+        print(f"Série gravada em {argumentos.salvar}.")
+    if argumentos.erro_maximo is not None and (not np.isfinite(erro) or erro > argumentos.erro_maximo):
+        print("A simulação não atingiu o limite de erro declarado.", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -426,6 +459,8 @@ def construir_analisador() -> argparse.ArgumentParser:
     simular.add_argument("--deriva", type=float, default=0.0)
     simular.add_argument("--movimento", type=float, default=0.0)
     simular.add_argument("--mostrar", action="store_true")
+    simular.add_argument("--erro-maximo", type=_nao_negativo_finito,
+                         help="falha se não houver estimativa ou o erro bruto exceder o limite em bpm")
     _adicionar_opcoes_analise(simular)
     # A demonstração padrão dura 20 s e precisa conter uma janela completa.
     simular.set_defaults(funcao=_comando_simular, janela=10.0)

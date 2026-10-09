@@ -428,19 +428,21 @@ def test_algoritmo_invalido_e_recusado() -> None:
 
 
 @pytest.mark.parametrize("bpm", (55.0, 72.0, 100.0))
-def test_comando_simular_roda_de_ponta_a_ponta(bpm: float, capsys) -> None:
+def test_comando_simular_roda_de_ponta_a_ponta(bpm: float, capsys, tmp_path) -> None:
     # A janela vai explícita para o teste não quebrar quando o padrão mudar. O
     # que ele verifica é o caminho de ponta a ponta, não o valor do padrão.
     codigo = main(
         [
             "simular", "--bpm", str(bpm), "--duracao", "22",
             "--janela", "15", "--algoritmo", "pos",
+            "--erro-maximo", "3", "--salvar", str(tmp_path / "leituras.csv"),
         ]
     )
     assert codigo == 0
     saida = capsys.readouterr().out
     assert "Frequência cardíaca" in saida
     assert "Erro absoluto" in saida
+    assert "instante_s,aceita" in (tmp_path / "leituras.csv").read_text(encoding="utf-8")
 
 
 def test_video_mais_curto_que_a_janela_avisa_o_motivo(capsys) -> None:

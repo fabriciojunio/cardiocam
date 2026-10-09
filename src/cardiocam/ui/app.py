@@ -103,8 +103,7 @@ def executar(
 def salvar_serie(caminho: str, relatorio: RelatorioSessao) -> None:
     """Grava as estimativas em CSV.
 
-    Só números: instante, BPM, relação sinal-ruído, confiança e algoritmo.
-    Nenhum quadro de vídeo é gravado em momento algum.
+    Inclui medições, recusas e diagnóstico textual, sem quadros de vídeo.
     """
     registros = relatorio.registros or [
         RegistroMedicao(None, e, e.aproveitavel, None, None, "", None)
@@ -114,7 +113,10 @@ def salvar_serie(caminho: str, relatorio: RelatorioSessao) -> None:
         escritor = csv.writer(arquivo)
         escritor.writerow(["janela", "bpm", "frequencia_hz", "snr_db", "confianca", "algoritmo",
                            "instante_s", "aceita", "qualidade", "codigo_falha", "mensagem",
-                           "idade_analise_s", "caracteristicas_ausentes", "historico_limitado"])
+                           "idade_analise_s", "caracteristicas_ausentes", "historico_limitado",
+                           "luminancia_pele_p05_quadro", "luminancia_pele_mediana_quadro",
+                           "luminancia_pele_p95_quadro", "fracao_pele_quadro", "fracao_saturada_quadro",
+                           "fps_janela", "jitter_intervalos_s"])
         for indice, registro in enumerate(registros):
             e = registro.estimativa
             escritor.writerow([
@@ -125,4 +127,7 @@ def salvar_serie(caminho: str, relatorio: RelatorioSessao) -> None:
                 registro.instante, registro.aceita, registro.qualidade, registro.codigo_falha,
                 registro.mensagem, registro.idade_analise_s,
                 ";".join(registro.caracteristicas_ausentes), relatorio.historico_limitado,
+                registro.luminancia_pele_p05_quadro, registro.luminancia_pele_mediana_quadro,
+                registro.luminancia_pele_p95_quadro, registro.fracao_pele_quadro,
+                registro.fracao_saturada_quadro, registro.fps_janela, registro.jitter_intervalos_s,
             ])
