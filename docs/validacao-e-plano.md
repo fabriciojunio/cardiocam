@@ -30,8 +30,8 @@ da conclusão:
   passaram na execução completa anterior; não são 2.363 testes com pessoas.
 - A demonstração sintética agora tem janela compatível com sua duração e
   `--erro-maximo` para falhar sem estimativa ou acima do limite.
-- Os novos jobs de Windows e dependências mínimas foram acrescentados à CI.
-  Eles ainda precisam executar no GitHub; alteração de workflow não é resultado.
+- Os jobs de Windows e dependências mínimas foram acrescentados à CI e
+  passaram na execução remota registrada abaixo.
 - Os documentos de iniciação científica passaram pelo verificador de UTF-8,
   acentos, links e tabelas. Isso não aprova seu conteúdo científico ou jurídico.
 
@@ -71,7 +71,7 @@ uma infraestrutura disponível com validação ou integração ainda pendente.
 | 20 | Selecionar o participante na janela da reunião | Implementado | Recorte relativo e diálogo de seleção; resolução variável |
 | 21 | Detectar área coberta por outra janela | Parcial | Amostragem de cinco pontos no Windows; teste em reuniões reais pendente |
 | 22 | Liberar câmera e arquivo após interrupção ou erro | Implementado | Encerramento e desconexão; `finally` no modo arquivo |
-| 23 | Conferir Windows e versões mínimas de dependências na CI | Parcial | Jobs adicionados; execução remota pendente |
+| 23 | Conferir Windows e versões mínimas de dependências na CI | Implementado | Jobs remotos aprovados; evidência na seção de integração contínua |
 | 24 | Compatibilizar NumPy 1.26 e mss 9 | Implementado | Integração numérica via SciPy e fábrica de captura compatível |
 | 25 | Exigir estimativa e limite de erro na demonstração da CI | Implementado | Guarda `--erro-maximo` e exportação da simulação |
 | 26 | Conferir instalação por wheel em ambiente limpo | Implementado | Instalação, importação, dados do modelo, Qt e comandos verificados; detalhes abaixo |
@@ -153,6 +153,19 @@ registradas acima passaram com quatro workers.
 
 Essas verificações não abrangem todas as máquinas Windows, drivers, câmeras,
 condições de luz, participantes ou políticas das plataformas de reunião.
+
+## Integração contínua remota
+
+A execução [37965251212](https://github.com/fabriciojunio/cardiocam/actions/runs/37965251212)
+da revisão `a881a099b1321de6d21ab35b6c8402df07dee729` terminou em
+09/10/2026 com os oito jobs aprovados: Python 3.10, 3.11, 3.12 e 3.13,
+Windows, dependências mínimas, documentação e demonstração sintética.
+
+No Linux/Python 3.12, a suíte completa registrou **2.455 testes aprovados e
+dois ignorados**, em **991,48 s**, com **85,04% de cobertura**, incluindo ramos.
+A meta de 80% foi mantida. Essa execução confirma os testes e ambientes
+declarados; não substitui avaliação com participantes, câmeras físicas ou
+referência ECG/PPG sincronizada.
 
 ## Ordem de continuação
 
