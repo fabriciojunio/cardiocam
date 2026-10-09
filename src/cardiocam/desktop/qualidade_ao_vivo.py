@@ -94,6 +94,8 @@ class JuizDeQualidade:
             estado.amostra.proporcao_pele,
             fracao_saturada(quadro, estado.caixa),
             (estado.caixa.x + estado.caixa.largura / 2.0) / largura,
+            instante=getattr(estado, "instante", None),
+            inicio=getattr(estado, "inicio_janela", None),
         )
 
     def caracteristicas(self, analise) -> Caracteristicas:

@@ -166,6 +166,7 @@ class EstadoQuadro:
     nova_analise: bool = False
     contexto_reiniciado: bool = False
     codigo_falha: str | None = None
+    inicio_janela: float | None = None
 
     @property
     def idade_analise_s(self) -> float | None:
@@ -315,12 +316,12 @@ class MonitorCardiaco:
         self.janela.adicionar(
             amostra.vermelho, amostra.verde, amostra.azul, instante, amostra.fundo
         )
-        estado.progresso = min(1.0, len(self.janela) / self.janela.capacidade)
+        estado.progresso = self.janela.progresso
+        estado.inicio_janela = self.janela.inicio
 
         if not self.janela.deve_emitir():
             if not self.janela.cheia:
-                faltam = self.janela.capacidade - len(self.janela)
-                segundos = faltam / max(1e-6, self.janela.fps_efetivo())
+                segundos = max(0.0, self.config.janela_s - self.janela.duracao_s)
                 estado.mensagem = f"Coletando sinal, faltam {segundos:.0f} s."
             else:
                 estado.mensagem = "Medindo."
