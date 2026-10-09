@@ -32,7 +32,7 @@ from cardiocam.avaliacao.benchmark import Cenario, cenarios_de_robustez
 from cardiocam.dominio.config import ConfiguracaoAnalise
 from cardiocam.fontes.sintetica import FonteSintetica
 from cardiocam.pipeline.analisador import MonitorCardiaco
-from cardiocam.qualidade.caracteristicas import extrair
+from cardiocam.qualidade.extracao import caracteristicas_da_analise
 from cardiocam.qualidade.treino import Amostra
 from cardiocam.rppg import ALGORITMOS_DISPONIVEIS, criar_algoritmo
 
@@ -70,6 +70,11 @@ class ContextoDaJanela:
         self.pele.append(float(proporcao_pele))
         self.saturacao.append(float(saturada))
         self.centro_x.append(float(centro))
+
+    def limpar(self) -> None:
+        self.pele.clear()
+        self.saturacao.clear()
+        self.centro_x.clear()
 
     @property
     def completo(self) -> bool:
@@ -148,6 +153,8 @@ def coletar_de_video(
 
             for quadro, instante in fonte.quadros():
                 estado = monitor.processar(quadro, instante)
+                if estado.contexto_reiniciado:
+                    contexto.limpar()
                 if estado.amostra is not None and estado.caixa is not None:
                     contexto.registrar(
                         estado.amostra.proporcao_pele,
@@ -165,15 +172,7 @@ def coletar_de_video(
 
                 amostras.append(
                     Amostra(
-                        caracteristicas=extrair(
-                            pulso=analise.pulso,
-                            espectro=analise.espectro,
-                            frequencia_hz=analise.estimativa.frequencia_hz,
-                            snr_db=analise.estimativa.snr_db,
-                            fracao_de_pele=contexto.media_de_pele(),
-                            fracao_saturada=contexto.media_saturada(),
-                            posicoes_roi=contexto.deslocamento(),
-                        ),
+                        caracteristicas=caracteristicas_da_analise(analise, contexto=contexto),
                         erro_bpm=float(
                             abs(analise.estimativa.bpm - cenario.bpm_verdadeiro)
                         ),

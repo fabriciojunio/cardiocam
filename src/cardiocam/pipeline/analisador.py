@@ -13,7 +13,7 @@ processamento de sinais, e a média RGB é a fronteira entre os dois mundos.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -65,6 +65,8 @@ class AnaliseCompleta:
     espectro: Espectro
     hrv: VariabilidadeCardiaca
     bpm_por_picos: float
+    serie: SerieRGB | None = None
+    instantes_originais: np.ndarray | None = None
 
     @property
     def concordancia_bpm(self) -> float:
@@ -87,6 +89,7 @@ def estimar_de_serie(
     """
     config = config or ConfiguracaoAnalise()
     algoritmo = algoritmo or criar_algoritmo(config.algoritmo)
+    serie_original = serie
 
     # Rectificação por referência de fundo, aplicada canal a canal antes do
     # algoritmo. A ordem importa: o balanço de branco automático age sobre cada
@@ -141,6 +144,8 @@ def estimar_de_serie(
             bpm_por_picos=_bpm_por_picos(
                 pulso, config.banda, frequencia_esperada_hz=analise.frequencia_hz
             ),
+            serie=serie_original,
+            instantes_originais=serie_original.instantes,
         )
     )
 
@@ -156,6 +161,17 @@ class EstadoQuadro:
     mensagem: str = ""
     progresso: float = 0.0
     """Fração da janela já preenchida, de 0 a 1."""
+    instante: float | None = None
+    instante_analise: float | None = None
+    nova_analise: bool = False
+    contexto_reiniciado: bool = False
+    codigo_falha: str | None = None
+
+    @property
+    def idade_analise_s(self) -> float | None:
+        if self.instante is None or self.instante_analise is None:
+            return None
+        return max(0.0, self.instante - self.instante_analise)
 
     @property
     def tem_rosto(self) -> bool:
@@ -195,6 +211,8 @@ class MonitorCardiaco:
         self._ultima_analise: AnaliseCompleta | None = None
         self._historico: list[EstimativaBPM] = []
         self._quadros_processados = 0
+        self._instante_analise: float | None = None
+        self._ultimo_instante: float | None = None
 
     @property
     def bpm_atual(self) -> float | None:
@@ -231,21 +249,53 @@ class MonitorCardiaco:
         self.janela.limpar()
         self.rastreador.reiniciar()
         self.extrator.reiniciar()
+        self._invalidar_leitura()
+        self._ultimo_instante = None
+
+    def _invalidar_leitura(self) -> None:
         self._bpm_suavizado = None
         self._ultima_analise = None
+        self._instante_analise = None
 
     def processar(self, quadro: np.ndarray, instante: float) -> EstadoQuadro:
         """Consome um quadro e devolve o estado atualizado."""
         self._quadros_processados += 1
-        estado = EstadoQuadro(bpm_exibido=self._bpm_suavizado)
+        estado = EstadoQuadro(instante=instante)
+        if not np.isfinite(instante):
+            self.reiniciar()
+            estado.contexto_reiniciado = True
+            estado.codigo_falha = "tempo_invalido"
+            estado.mensagem = "O quadro não possui um instante válido."
+            return estado
+        limite_pausa = max(1.0, 2.0 * self.config.passo_s)
+        if self._ultimo_instante is not None:
+            intervalo = instante - self._ultimo_instante
+            if intervalo <= 0:
+                self.reiniciar()
+                estado.contexto_reiniciado = True
+                estado.codigo_falha = "tempo_nao_monotonico"
+                estado.mensagem = "O instante do quadro foi repetido ou retrocedeu."
+                return estado
+            if intervalo > limite_pausa:
+                self.reiniciar()
+                estado.contexto_reiniciado = True
+        self._ultimo_instante = instante
+        if (self._instante_analise is not None
+                and instante - self._instante_analise > limite_pausa):
+            self._invalidar_leitura()
+        estado.bpm_exibido = self._bpm_suavizado
+        estado.instante_analise = self._instante_analise
 
         deteccao = self.rastreador.atualizar(quadro)
         if deteccao.falhou:
-            if self.rastreador.perdeu_o_rosto and len(self.janela):
+            if self.rastreador.perdeu_o_rosto:
                 self.janela.limpar()
-                self._bpm_suavizado = None
-                self._ultima_analise = None
-                estado.bpm_exibido = None
+                self.extrator.reiniciar()
+                self._invalidar_leitura()
+                estado.contexto_reiniciado = True
+            estado.bpm_exibido = None
+            estado.instante_analise = None
+            estado.codigo_falha = "rosto_nao_encontrado"
             estado.mensagem = "Rosto não encontrado. Olhe para a câmera."
             return estado
 
@@ -253,6 +303,10 @@ class MonitorCardiaco:
 
         extracao = self.extrator.extrair(quadro, estado.caixa)
         if extracao.falhou:
+            self._invalidar_leitura()
+            estado.bpm_exibido = None
+            estado.instante_analise = None
+            estado.codigo_falha = extracao.erro.codigo
             estado.mensagem = str(extracao.erro)
             return estado
 
@@ -277,14 +331,23 @@ class MonitorCardiaco:
         resultado = estimar_de_serie(self.janela.serie(), self.config, self.algoritmo)
 
         if resultado.falhou:
-            estado.mensagem = "Sinal fraco. Fique parado e melhore a iluminação."
-            estado.analise = self._ultima_analise
+            self._invalidar_leitura()
+            estado.bpm_exibido = None
+            estado.instante_analise = None
+            estado.codigo_falha = resultado.erro.codigo
+            estado.mensagem = str(resultado.erro)
             return estado
 
-        analise = resultado.desempacotar()
+        analise = replace(
+            resultado.desempacotar(),
+            instantes_originais=self.janela.serie(uniformizar=False).instantes,
+        )
         self._ultima_analise = analise
+        self._instante_analise = instante
         self._historico.append(analise.estimativa)
         estado.analise = analise
+        estado.instante_analise = instante
+        estado.nova_analise = True
         estado.bpm_exibido = self._suavizar(analise.estimativa.bpm)
         estado.mensagem = f"Confiança {analise.estimativa.confianca.value}."
         return estado
