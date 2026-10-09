@@ -62,19 +62,33 @@ class ContextoDaJanela:
     capacidade: int
 
     def __post_init__(self) -> None:
-        self.pele: deque[float] = deque(maxlen=self.capacidade)
-        self.saturacao: deque[float] = deque(maxlen=self.capacidade)
-        self.centro_x: deque[float] = deque(maxlen=self.capacidade)
+        self.pele: deque[float] = deque()
+        self.saturacao: deque[float] = deque()
+        self.centro_x: deque[float] = deque()
+        self.instantes: deque[float | None] = deque()
 
-    def registrar(self, proporcao_pele: float, saturada: float, centro: float) -> None:
+    def registrar(self, proporcao_pele: float, saturada: float, centro: float,
+                  instante: float | None = None, inicio: float | None = None) -> None:
         self.pele.append(float(proporcao_pele))
         self.saturacao.append(float(saturada))
         self.centro_x.append(float(centro))
+        self.instantes.append(instante)
+        if inicio is None:
+            while len(self.pele) > self.capacidade:
+                self._remover_primeiro()
+        else:
+            while self.instantes and (self.instantes[0] is None or self.instantes[0] < inicio - 1e-8):
+                self._remover_primeiro()
+
+    def _remover_primeiro(self) -> None:
+        for buffer in (self.pele, self.saturacao, self.centro_x, self.instantes):
+            buffer.popleft()
 
     def limpar(self) -> None:
         self.pele.clear()
         self.saturacao.clear()
         self.centro_x.clear()
+        self.instantes.clear()
 
     @property
     def completo(self) -> bool:
@@ -161,6 +175,7 @@ def coletar_de_video(
                         fracao_saturada(quadro, estado.caixa),
                         (estado.caixa.x + estado.caixa.largura / 2.0)
                         / max(1, quadro.shape[1]),
+                        instante=instante, inicio=estado.inicio_janela,
                     )
 
                 if len(monitor.historico) <= emitidas:
