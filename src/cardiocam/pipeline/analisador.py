@@ -487,7 +487,7 @@ def analisar_fonte(
     relatorio = RelatorioSessao()
     from cardiocam.pipeline.registros import RegistroMedicao
     from cardiocam.desktop.qualidade_ao_vivo import JuizDeQualidade, aplicar_qualidade
-    juiz = JuizDeQualidade(monitor.janela.capacidade)
+    juiz = JuizDeQualidade(monitor.janela.capacidade, caminho_modelo=config.modelo_qualidade)
     for indice, (quadro, instante) in enumerate(fonte.quadros()):
         if limite_quadros is not None and indice >= limite_quadros:
             break

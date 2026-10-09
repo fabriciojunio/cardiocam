@@ -39,6 +39,7 @@ def _configuracao(argumentos: argparse.Namespace) -> ConfiguracaoAnalise:
         passo_s=argumentos.passo,
         banda=BandaCardiaca(argumentos.bpm_minimo / 60.0, argumentos.bpm_maximo / 60.0),
         algoritmo=argumentos.algoritmo,
+        modelo_qualidade=getattr(argumentos, "modelo_qualidade", None),
     )
 
 
@@ -391,6 +392,8 @@ def _comando_qualidade(argumentos: argparse.Namespace) -> int:
 
 
 def _adicionar_opcoes_analise(analisador: argparse.ArgumentParser) -> None:
+    analisador.add_argument("--modelo-qualidade", type=_modelo_qualidade,
+                            help="modelo JSON verificado, sem substituir o distribuído")
     analisador.add_argument(
         "--algoritmo",
         choices=ALGORITMOS_DISPONIVEIS,
@@ -419,6 +422,15 @@ def _adicionar_opcoes_analise(analisador: argparse.ArgumentParser) -> None:
         "--bpm-maximo", type=float, default=200.0, help="limite superior da banda"
     )
     analisador.add_argument("--salvar", help="grava as estimativas em CSV")
+
+
+def _modelo_qualidade(caminho: str) -> str:
+    from cardiocam.qualidade.persistencia import carregar
+    try:
+        carregar(caminho)
+    except (OSError, ValueError, KeyError) as erro:
+        raise argparse.ArgumentTypeError(f"Modelo de qualidade inválido: {erro}") from erro
+    return caminho
 
 
 def construir_analisador() -> argparse.ArgumentParser:
@@ -552,11 +564,17 @@ def construir_analisador() -> argparse.ArgumentParser:
     qualidade.add_argument("--saida", help="grava o relatório em Markdown")
     qualidade.set_defaults(funcao=_comando_qualidade)
 
+    from cardiocam.pesquisa.cli import adicionar_comandos
+    adicionar_comandos(subcomandos)
+    from cardiocam.teleconsulta.cli import adicionar_comandos as adicionar_teleconsulta
+    adicionar_teleconsulta(subcomandos)
     return analisador
 
 
 def main(argumentos: list[str] | None = None) -> int:
     """Ponto de entrada."""
+    from cardiocam.__main__ import _preparar_console
+    _preparar_console()
     analisador = construir_analisador()
     opcoes = analisador.parse_args(argumentos)
     try:

@@ -31,7 +31,7 @@ import numpy as np
 from cardiocam.qualidade.caracteristicas import Caracteristicas
 from cardiocam.qualidade.extracao import caracteristicas_da_analise, caracteristicas_ausentes
 from cardiocam.qualidade.coleta_de_video import ContextoDaJanela, fracao_saturada
-from cardiocam.qualidade.persistencia import Procedencia, carregar_se_houver
+from cardiocam.qualidade.persistencia import Procedencia, carregar, carregar_se_houver
 from cardiocam.qualidade.treino import ModeloDeQualidade
 
 
@@ -92,8 +92,9 @@ class JuizDeQualidade:
     existiu.
     """
 
-    def __init__(self, capacidade_da_janela: int) -> None:
-        carregado = carregar_se_houver()
+    def __init__(self, capacidade_da_janela: int, caminho_modelo: str | None = None) -> None:
+        # Modelo explicitamente escolhido não pode cair no fallback em silêncio.
+        carregado = carregar(caminho_modelo) if caminho_modelo is not None else carregar_se_houver()
         self.modelo: ModeloDeQualidade | None = carregado[0] if carregado else None
         self.procedencia: Procedencia | None = carregado[1] if carregado else None
         self.contexto = ContextoDaJanela(capacidade=max(1, capacidade_da_janela))

@@ -159,7 +159,7 @@ class LacoDeMedicao(QThread):
             if not self._rodando:
                 return
             monitor = MonitorCardiaco(fps=fonte.fps, config=self.config)
-            juiz = JuizDeQualidade(self.config.amostras_por_janela(fonte.fps))
+            juiz = JuizDeQualidade(self.config.amostras_por_janela(fonte.fps), caminho_modelo=self.config.modelo_qualidade)
             for quadro, instante in fonte.quadros():
                 if not self._rodando:
                     break
@@ -204,7 +204,7 @@ class LacoDeMedicao(QThread):
                 DetectorHaar(), intervalo_deteccao=DETECCAO_A_CADA_N_QUADROS
             ),
         )
-        juiz = JuizDeQualidade(self.config.amostras_por_janela(taxa))
+        juiz = JuizDeQualidade(self.config.amostras_por_janela(taxa), caminho_modelo=self.config.modelo_qualidade)
         intervalo = 1.0 / taxa
         inicio = time.perf_counter()
         ultima_releitura = 0.0
