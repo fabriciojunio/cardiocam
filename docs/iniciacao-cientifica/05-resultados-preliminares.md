@@ -128,20 +128,21 @@ Dois achados aqui, e os dois entram no projeto:
 
 ## 3. Testes automatizados
 
-**2.212 casos em Python**, e nenhum usa simulacro no lugar do
-código real. A estratégia é a mesma em todos os níveis: gerar um sinal cuja
-frequência verdadeira foi escolhida por nós, rodar o sistema de verdade e
-conferir o que sai.
+Os testes usam sinais conhecidos, imagens sintéticas e substitutos controlados
+de APIs de hardware para exercitar erros de captura e estados da interface.
+A antiga contagem de 2.212 não correspondia à soma da tabela publicada e foi
+removida. A contagem atual é obtida por `pytest --collect-only -q`.
 
-| Nível | Casos | O que exercita |
-| --- | ---: | --- |
-| Unidade | 1.499 | resposta em frequência do filtro medida em dezenas de frequências; recuperação de senoides varrendo 45 a 220 bpm em passos de 2,5 bpm; remoção de tendência; rectificação; detecção de picos; geometria; **segmentação de pele em oito tons diferentes** |
-| Integração | 601 | os quatro algoritmos sobre séries modeladas fisicamente, variando tom de pele, taxa de quadros, amplitude, ruído e interferência; pipeline, fontes, interface, linha de comando e ajustes de câmera |
-| Ponta a ponta | 98 | vídeo renderizado quadro a quadro, cascata de Haar procurando o rosto de fato, até o número final |
+| Nível | O que exercita |
+| --- | --- |
+| Unidade | filtros, espectro, pele, geometria, timestamps, persistência e qualidade |
+| Integração | séries modeladas, pipeline, fontes, Qt, exportação, referência sincronizada e linha de comando |
+| Ponta a ponta | vídeo renderizado quadro a quadro, detector Haar e estimativa final |
 
-Cobertura de 87%. O que fica fora é quase todo o código que só executa com
-hardware presente: abrir a webcam e o laço da janela gráfica. O núcleo de sinais
-e de visão fica entre 88% e 100%.
+A meta de cobertura é 80%, incluindo ramos e excluindo `fontes/webcam.py`,
+`fontes/tela.py` e `ui/app.py`. O percentual deve ser medido na revisão avaliada.
+A passagem desses testes não demonstra precisão clínica, equidade por tom de
+pele nem robustez em videochamadas reais.
 
 **Três testes existem para provar que o sistema sabe dizer "não sei"**, que é o
 requisito mais importante de um medidor: parede lisa filmada, imagem saturada em

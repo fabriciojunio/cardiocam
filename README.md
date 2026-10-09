@@ -146,35 +146,33 @@ intuição:
 As duas conclusões saíram de um teste de controle que reprovou duas versões do
 cenário. Nas duas vezes o certo era mudar o cenário, não o limiar.
 
-**O número exibido vem do espectro médio**, e não de suavizar estimativas de
-janelas isoladas. Promediar o espectro de janelas sucessivas é a técnica de
-Welch: a variância do espectro estimado cai com o número de segmentos, e disso
-vem tanto um número mais firme quanto um pico que emerge em condição pior. O
-peso de esquecimento, 0,15, saiu de medição contra três alternativas, e é o
-único que ganha da média exponencial **nos dois eixos ao mesmo tempo**: 0,030
-contra 0,036 de desvio, e 17 s contra 19 s para acompanhar uma mudança real de
-frequência. Somar sem esquecer leva 60 s para acompanhar, e foi descartado. A
-mediana móvel também foi medida, e dá desvio pior que a exponencial.
+**O número exibido usa suavização exponencial das estimativas.** Cada janela
+produz uma estimativa espectral própria. O pipeline Python atual não mantém
+uma média dos espectros de janelas sucessivas. As comparações de suavização
+documentadas em versões anteriores precisam ser reproduzidas neste pipeline.
 
-**A correção por fundo é escolhida por medição, não assumida.** As duas versões
-do sinal são calculadas a cada janela, com e sem a correção, e a de melhor
-relação sinal-ruído vence. Isso existe porque a correção não ajuda sempre: num
-enquadramento com roupa clara ocupando metade do quadro, aplicá-la piorou a
-dispersão de 0,10 para 10,12 bpm, porque a referência de iluminação continha
-ombro e roupa, que se movem com a pessoa.
+**A correção por fundo é configurável.** Quando `usar_fundo=True`, o pipeline
+aplica a rectificação antes da extração de pulso. Ele não calcula duas versões
+para escolher automaticamente a de maior SNR. A referência deve representar
+iluminação compartilhada com o rosto; roupa, pessoas passando e movimentos
+podem contaminá-la. Essa hipótese precisa ser avaliada com referência cardíaca.
 
 **A taxa de captura é limitada a 20 quadros por segundo, de propósito.** A
 câmera não pode expor um quadro por mais tempo que o intervalo entre quadros: a
 60 o limite é 16 ms, a 20 é 50 ms. Odinaev et al. (CVPRW 2023) acharam o ótimo
 de exposição em 1/16 de segundo e mostram que exposição maior melhora a
 correlação com o fotopletismógrafo de contato em pouca luz, funcionando com até
-25 lux. A revisão sistemática da área dá 19,9 quadros por segundo como piso.
-Para a banda cardíaca, que vai a 3,3 Hz, 20 ainda são três vezes Nyquist.
+25 lux na configuração estudada. O alvo de 20 FPS é uma escolha prática,
+não um limite universal demonstrado por revisão sistemática. Um
+[estudo de webcam on-line](https://doi.org/10.3758/s13428-024-02398-0)
+adotou 20 FPS como regra de seleção. A suficiência depende também da banda,
+exposição, ruído e regularidade temporal: o padrão da API vai até 4 Hz e o
+padrão da linha de comando até 200 bpm. A análise usa os timestamps entregues.
 
 ## Instalação
 
 ```bash
-git clone https://github.com/<usuario>/cardiocam.git
+git clone https://github.com/fabriciojunio/cardiocam.git
 cd cardiocam
 python -m venv .venv
 .venv\Scripts\activate        # Windows
@@ -182,9 +180,10 @@ source .venv/bin/activate     # Linux e macOS
 pip install -e ".[dev]"
 ```
 
-Precisa de Python 3.10 a 3.13. O OpenCV está fixado na linha 4.x de propósito:
-a 5.0 removeu os classificadores em cascata, que vêm embutidos no pacote e
-evitam qualquer download em tempo de execução.
+Precisa de Python 3.10 a 3.13. O OpenCV está limitado à linha 4.x, utilizada
+nos testes. Os classificadores em cascata acompanham esse pacote e evitam
+download em tempo de execução. Uma versão principal nova precisa de avaliação
+de compatibilidade antes de ampliar o intervalo de dependências.
 
 ## Uso
 
@@ -421,33 +420,42 @@ pytest -m "not lento"          # pula os testes de vídeo
 pytest --cov=cardiocam         # com cobertura
 ```
 
-São 2.212 casos em Python, e nenhum usa simulacro no lugar do
-código real. A estratégia é a mesma em todos os níveis: gerar um sinal cuja
-frequência verdadeira nós escolhemos, rodar o sistema de verdade e conferir o
-que sai.
+Os testes de sinais usam frequências conhecidas, e os testes de vídeo percorrem
+o pipeline com rostos renderizados. Há também substitutos controlados das APIs
+de câmera, captura, Windows e falhas de qualidade para reproduzir condições que
+não dependem do hardware disponível. Isso não mede precisão em pacientes.
 
-- **Unidade** (1.499 casos): resposta em frequência do filtro medida em dezenas
-  de frequências, recuperação de senoides varrendo a banda de 45 a 220 bpm em
-  passos de 2,5 bpm, remoção de tendência, rectificação por referência de fundo,
-  detecção de picos, geometria, segmentação de pele em oito tons diferentes, e o
-  modelo de qualidade: recuperação de pesos conhecidos, encolhimento da
-  probabilidade longe do treino e aferição de calibração.
-- **Integração** (601 casos): os quatro algoritmos sobre séries RGB modeladas
-  fisicamente, variando tom de pele, taxa de quadros, amplitude do pulso, ruído
-  e interferência; mais pipeline, fontes, interface, linha de comando e o treino
-  da abstenção de ponta a ponta sobre a bateria inteira.
-- **Ponta a ponta** (98 casos): vídeo renderizado quadro a quadro, cascata de
-  Haar procurando o rosto de fato, até o número final.
+- **Unidade:** filtros, espectro, pele, geometria, tempo, persistência e qualidade.
+- **Integração:** algoritmos, exportação, recusas, CLI, Qt e treino sintético.
+- **Ponta a ponta:** vídeo renderizado, detector Haar e estimativa final.
+
+Use `pytest --collect-only -q` para obter a contagem da versão instalada.
+Os resultados da auditoria e as pendências estão no
+[plano de validação](docs/validacao-e-plano.md).
 
 Três testes existem para provar que o sistema sabe dizer "não sei", que é o
 requisito mais importante de um medidor: parede lisa filmada, imagem saturada
 em 255 e vídeo mais curto que a janela não podem produzir nenhum valor.
 
-A cobertura é de 87%. O que fica de fora é quase todo o código que só executa
-com hardware presente: abrir a webcam (49%) e o laço da janela gráfica (32%).
-São as duas fronteiras com o sistema operacional, e testá-las exigiria câmera
-física e servidor gráfico na integração contínua. O núcleo de sinais e de visão
-fica entre 88% e 100%.
+A meta de cobertura é 80%, com ramos. A configuração exclui as fronteiras
+`fontes/webcam.py`, `fontes/tela.py` e `ui/app.py`; as exclusões não significam
+que esses módulos foram validados em hardware. A porcentagem deve ser obtida
+na execução correspondente à versão, sem reutilizar números de revisões antigas.
+
+## Experimentos e referência cardíaca
+
+LGI, OMIT e PBV adaptativo estão disponíveis para comparação experimental:
+
+```bash
+python -m cardiocam.avaliacao.experimentos
+python -m cardiocam.avaliacao.referencia docs/exemplos/manifesto-sintetico.json --saida resultado.json
+```
+
+O segundo comando usa um exemplo numérico sintético. Para avaliar vídeos reais,
+use o [protocolo de referência](docs/protocolo-validacao-real.md). O modelo
+de qualidade distribuído foi treinado em dados sintéticos e ainda precisa de
+calibração e avaliação em participantes não vistos. O aplicativo é um protótipo
+de pesquisa; não foi validado para decisões clínicas.
 
 ## Privacidade
 
