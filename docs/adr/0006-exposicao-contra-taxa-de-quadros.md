@@ -154,11 +154,14 @@ E com a câmera sintética, que entrega um rosto com 75 batimentos por minuto
 gravados: a página mede 79, com relação sinal-ruído de 21,7 dB sobre catorze
 janelas, e a barra de progresso completa.
 
-**O que continua limitado, e é honesto declarar.** Com luminância 11 de 255 não
-há medição possível, e nenhum ajuste de câmera resolve isso: o pulso vale entre
-0,1% e 1% da intensidade, e abaixo de 60 ele fica menor que o passo de
-quantização do sensor. O que mudou é que a página agora **diz isso**, com o
-número medido, em vez de reabrir a câmera atrás de uma causa que não existe.
+**Limite da observação.** Na câmera e nas condições desse diagnóstico, a
+luminância observada foi 11 de 255 e não houve leitura aproveitável. Isso não
+estabelece um corte universal de luminância: média espacial de muitos pixels,
+ruído, ganho, exposição e processamento do sensor alteram a informação
+recuperável. Uma variação inferior a um nível de um pixel não demonstra, por
+si só, que o sinal agregado seja irrecuperável. Este registro descreve a antiga
+página web; o aplicativo Python atual deve informar a causa efetivamente
+detectada pelo pipeline, sem atribuir toda recusa à iluminação.
 
 **O custo.** A abertura ficou cerca de dois segundos mais lenta, gastos medindo
 e ajustando. É pago com uma mensagem na tela dizendo o que está acontecendo.

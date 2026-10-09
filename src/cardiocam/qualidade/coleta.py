@@ -15,11 +15,10 @@ mediria outra coisa.
 A troca está declarada em vez de escondida, porque é ela que decide se o
 resultado é transferível.
 
-**As janelas que falham entram como amostra, não somem.** Quando a estimativa
-nem sai, a informação é a mais valiosa que existe para um modelo de abstenção:
-aquela janela era irrecuperável. Descartá-las treinaria o modelo só no que já
-funciona, que é o viés de sobrevivência na sua forma mais pura. Elas entram com
-o erro marcado pelo teto declarado em `ERRO_DE_FALHA_BPM`.
+**Falhas são contadas separadamente.** Uma janela sem estimativa não fornece
+as características espectrais necessárias ao classificador e não entra como
+amostra com erro inventado. O treino é condicionado às estimativas produzidas;
+a cobertura do sistema completo deve incluir também as falhas do pipeline.
 """
 
 from __future__ import annotations
