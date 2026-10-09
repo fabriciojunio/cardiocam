@@ -190,6 +190,7 @@ def treinar(
     cobertura_minima: float = 0.5,
     erro_alvo_bpm: float = 2.0,
     semente: int = 0,
+    particao: Particao | None = None,
 ) -> RelatorioDeTreino:
     """Treina, calibra, escolhe o limiar e mede no teste, nessa ordem.
 
@@ -213,7 +214,15 @@ def treinar(
     erros = np.array([abs(a.erro_bpm) for a in amostras])
     grupos = [a.grupo for a in amostras]
 
-    particao = particionar(grupos, semente=semente)
+    particao = particao if particao is not None else particionar(grupos, semente=semente)
+    partes = (particao.treino, particao.calibracao, particao.teste)
+    indices = np.concatenate(partes)
+    if (indices.dtype.kind not in "iu" or len(indices) != len(amostras)
+            or not np.array_equal(np.sort(indices), np.arange(len(amostras)))):
+        raise ValueError("A partição deve conter cada amostra exatamente uma vez.")
+    grupos_partes = [set(grupos[int(i)] for i in parte) for parte in partes]
+    if any(grupos_partes[i] & grupos_partes[j] for i in range(3) for j in range(i+1, 3)):
+        raise ValueError("Um participante aparece em mais de uma partição.")
     if particao.treino.size == 0 or particao.teste.size == 0:
         raise ValueError("A partição deixou treino ou teste vazios.")
 

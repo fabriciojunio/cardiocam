@@ -1,10 +1,9 @@
 """Fixtures e utilidades comuns aos testes.
 
-Princípio adotado na suíte: nada de simulacro. Os testes executam o código real
-sobre sinais e imagens gerados por um modelo físico do fenômeno, com a
-frequência verdadeira conhecida. Quando um teste afirma que o sistema mede
-72 bpm, é porque o pipeline inteiro rodou sobre um vídeo em que o pulso foi
-construído a 72 bpm.
+Os testes de medição executam o código real sobre sinais e imagens de
+frequência conhecida. As fronteiras com drivers e serviços também têm
+testes com respostas controladas; isso verifica tratamento de falhas,
+sem constituir validação de uma câmera física ou de precisão clínica.
 """
 
 from __future__ import annotations

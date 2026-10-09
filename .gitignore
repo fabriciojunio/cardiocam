@@ -16,6 +16,7 @@ htmlcov/
 *.mp4
 *.avi
 saidas/
+artefatos/
 
 # Vercel
 .vercel/

@@ -44,7 +44,7 @@ def executar(
     config = config or ConfiguracaoAnalise()
     monitor = MonitorCardiaco(fps=getattr(fonte, "fps", 30.0) or 30.0, config=config)
     pincel = PincelTexto()
-    juiz = JuizDeQualidade(monitor.janela.capacidade)
+    juiz = JuizDeQualidade(monitor.janela.capacidade, caminho_modelo=config.modelo_qualidade)
     registros = deque(maxlen=3600)
 
     relatorio = RelatorioSessao()

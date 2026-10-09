@@ -31,6 +31,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+pesquisa = ["torch>=2.6", "onnx>=1.16"]
 dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",
@@ -59,6 +60,7 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-q --strict-markers"
 markers = [
+    "pesquisa_neural: exige dependências optativas e executa redes em CPU",
     "lento: testes que processam vídeo completo e demoram mais",
     "camera: exige webcam física, desativado por padrão",
 ]
