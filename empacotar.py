@@ -3,8 +3,9 @@
 Uso:
     python empacotar.py
 
-O resultado sai em `dist/Cardiocam.exe`, um arquivo único que roda em qualquer
-Windows sem Python instalado. O tamanho fica na casa de algumas centenas de
+O resultado sai em `dist/Cardiocam.exe`, um arquivo único para Windows que
+inclui o interpretador Python. A compatibilidade precisa ser verificada nas
+versões de Windows usadas na distribuição. O tamanho fica na casa de centenas de
 megabytes porque OpenCV, SciPy, NumPy e Qt vão junto.
 
 O ponto de entrada é o **aplicativo de desktop**, e não a linha de comando: é
@@ -18,26 +19,17 @@ iOS ainda seria preciso conta paga de desenvolvedor.
 
 from __future__ import annotations
 
-import shutil
+import argparse
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
-RAIZ = Path(__file__).parent
+RAIZ = Path(__file__).resolve().parent
 NOME = "Cardiocam"
 
 
-def limpar() -> None:
-    for pasta in ("build", "dist"):
-        alvo = RAIZ / pasta
-        if alvo.exists():
-            shutil.rmtree(alvo)
-    especificacao = RAIZ / f"{NOME}.spec"
-    if especificacao.exists():
-        especificacao.unlink()
-
-
-def montar_comando() -> list[str]:
+def montar_comando(saida: Path, trabalho: Path) -> list[str]:
     import cv2
 
     # Os arquivos das cascatas de Haar vivem dentro do pacote do OpenCV e não
@@ -50,6 +42,8 @@ def montar_comando() -> list[str]:
     # do pacote, e o empacotador não leva dado de pacote por conta própria: sem
     # esta linha o executável sai decidindo pela regra fixa, em silêncio.
     modelo = RAIZ / "src" / "cardiocam" / "qualidade" / "modelo.json"
+    if not modelo.is_file() or not dados_haar.is_dir():
+        raise FileNotFoundError("Modelo de qualidade ou cascatas do OpenCV ausentes.")
 
     return [
         sys.executable,
@@ -60,6 +54,12 @@ def montar_comando() -> list[str]:
         "--onefile",
         "--name",
         NOME,
+        "--distpath",
+        str(saida),
+        "--workpath",
+        str(trabalho / "objetos"),
+        "--specpath",
+        str(trabalho),
         # Sem console: a interface é a janela, e um prompt preto abrindo junto
         # com ela não informa nada a quem clicou no ícone. Erro que antes ia
         # para o console agora vai para a bandeja, como notificação.
@@ -100,22 +100,28 @@ def montar_comando() -> list[str]:
     ]
 
 
-def main() -> int:
+def main(argumentos: list[str] | None = None) -> int:
+    analisador = argparse.ArgumentParser(description=__doc__)
+    analisador.add_argument("--saida", type=Path, default=RAIZ / "dist",
+                           help="pasta para o executável; outros arquivos são preservados")
+    opcoes = analisador.parse_args(argumentos)
     entrada = RAIZ / "src" / "cardiocam" / "desktop" / "__main__.py"
     if not entrada.exists():
         print(f"Ponto de entrada não encontrado: {entrada}", file=sys.stderr)
         return 1
 
-    print("Limpando saídas anteriores.")
-    limpar()
-
+    saida = opcoes.saida.resolve()
+    # Cada execução tem seu próprio espaço de trabalho. Não apagamos build,
+    # dist ou especificações que podem conter resultados de outra execução.
+    trabalho = Path(tempfile.mkdtemp(prefix="cardiocam-build-"))
     print("Empacotando. Isso demora alguns minutos.")
-    resultado = subprocess.run(montar_comando(), cwd=RAIZ)
+    print(f"Arquivos de construção: {trabalho}")
+    resultado = subprocess.run(montar_comando(saida, trabalho), cwd=RAIZ)
     if resultado.returncode != 0:
         print("O empacotamento falhou.", file=sys.stderr)
         return resultado.returncode
 
-    executavel = RAIZ / "dist" / (f"{NOME}.exe" if sys.platform.startswith("win") else NOME)
+    executavel = saida / (f"{NOME}.exe" if sys.platform.startswith("win") else NOME)
     if not executavel.exists():
         print("O executável não foi gerado.", file=sys.stderr)
         return 1
@@ -125,10 +131,8 @@ def main() -> int:
     print(f"Pronto: {executavel}  ({tamanho:.0f} MB)")
     print()
     print("Como usar:")
-    print(f"  {NOME}.exe ao-vivo")
-    print(f"  {NOME}.exe arquivo video.mp4 --mostrar")
-    print(f"  {NOME}.exe diagnostico --duracao 45")
-    print(f"  {NOME}.exe simular --bpm 84")
+    print("  Abra o executável e escolha a origem na janela do aplicativo.")
+    print("  A linha de comando é distribuída no pacote Python: python -m cardiocam.")
     return 0
 
 

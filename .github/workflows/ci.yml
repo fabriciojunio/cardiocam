@@ -120,7 +120,7 @@ jobs:
       - name: Medir um pulso simulado de frequência conhecida
         # Prova de fumaça de ponta a ponta: se o erro contra o valor verdadeiro
         # crescer, o build quebra.
-        run: cardiocam simular --bpm 84 --duracao 20 --algoritmo pos
+        run: cardiocam simular --bpm 84 --duracao 20 --algoritmo pos --erro-maximo 3
 
       - name: Comparar os algoritmos
         run: cardiocam avaliar

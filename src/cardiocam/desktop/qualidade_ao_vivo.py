@@ -44,10 +44,12 @@ class Veredito:
     tolerancia_bpm: float
     calibracao_viavel: bool = True
     caracteristicas_ausentes: tuple[str, ...] = ()
+    motivo_falha: str | None = None
 
     @property
     def recusa(self) -> bool:
-        return not self.calibracao_viavel or self.probabilidade < self.limiar
+        return (self.motivo_falha is not None or not self.calibracao_viavel
+                or self.probabilidade < self.limiar)
 
     @property
     def texto(self) -> str:
@@ -74,6 +76,10 @@ def aplicar_veredito(juiz, estado) -> Veredito | None:
                 f"Recusada pelo modelo de qualidade ({veredito.texto})."
                 if veredito.calibracao_viavel else "O modelo não possui calibração viável."
             )
+            if veredito.motivo_falha is not None:
+                estado.qualidade = None
+                estado.codigo_falha = "qualidade_indisponivel"
+                estado.mensagem = veredito.motivo_falha
     return veredito
 
 
@@ -130,9 +136,8 @@ class JuizDeQualidade:
     def julgar(self, analise) -> Veredito | None:
         """Probabilidade de a estimativa estar dentro da tolerância.
 
-        Devolve `None` quando não há modelo, e também quando a extração falha:
-        característica que não pôde ser calculada vira recusa silenciosa se
-        entrar como zero, e recusa silenciosa é pior que ausência de veredito.
+        Devolve `None` quando não há modelo. Se um modelo disponível falhar,
+        recusa explicitamente; a falha não autoriza publicar uma leitura.
         """
         if self.modelo is None or analise is None:
             return None
@@ -143,9 +148,13 @@ class JuizDeQualidade:
         try:
             probabilidade = self.modelo.probabilidade(self.caracteristicas(analise))
         except (ValueError, FloatingPointError):
-            return None
-        if not np.isfinite(probabilidade):
-            return None
+            probabilidade = float("nan")
+        if not np.isfinite(probabilidade) or not 0 <= probabilidade <= 1:
+            self._veredito = Veredito(
+                0.0, self.modelo.limiar, self.modelo.tolerancia_bpm,
+                motivo_falha="Não foi possível avaliar a qualidade desta janela.",
+            )
+            return self._veredito
         self._veredito = Veredito(
             probabilidade=float(probabilidade),
             limiar=float(self.modelo.limiar),
