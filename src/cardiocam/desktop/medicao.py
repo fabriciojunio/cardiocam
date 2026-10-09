@@ -19,6 +19,7 @@ medida.
 from __future__ import annotations
 
 import time
+from threading import Event
 from dataclasses import dataclass
 
 import cv2
@@ -114,13 +115,21 @@ class LacoDeMedicao(QThread):
         self.origem = origem
         self.config = config or ConfiguracaoAnalise()
         self._rodando = False
+        self._parada = Event()
 
     def parar(self) -> None:
+        self._parada.set()
+        self.requestInterruption()
         self._rodando = False
 
     # ------------------------------------------------------------------ laço
     def run(self) -> None:  # noqa: N802  (nome da API do Qt)
+        if self._parada.is_set():
+            return
         self._rodando = True
+        if self._parada.is_set():
+            self._rodando = False
+            return
         try:
             if self.origem.janela is not None:
                 self._medir_janela()
@@ -130,6 +139,8 @@ class LacoDeMedicao(QThread):
             # Qualquer falha aqui precisa chegar à interface. Thread que morre
             # calada deixa o botão dizendo "ligado" com nada acontecendo.
             self.falhou.emit(str(erro))
+        finally:
+            self._rodando = False
 
     def _medir_camera(self) -> None:
         from cardiocam.fontes.webcam import abrir_webcam
@@ -139,15 +150,19 @@ class LacoDeMedicao(QThread):
             self.falhou.emit(str(abertura.erro))
             return
         fonte = abertura.desempacotar()
-        monitor = MonitorCardiaco(fps=fonte.fps, config=self.config)
-        juiz = JuizDeQualidade(self.config.amostras_por_janela(fonte.fps))
         try:
+            if not self._rodando:
+                return
+            monitor = MonitorCardiaco(fps=fonte.fps, config=self.config)
+            juiz = JuizDeQualidade(self.config.amostras_por_janela(fonte.fps))
             for quadro, instante in fonte.quadros():
                 if not self._rodando:
                     break
                 estado = monitor.processar(quadro, instante)
                 juiz.registrar_quadro(quadro, estado)
                 self._publicar(estado, juiz)
+            if self._rodando:
+                self.falhou.emit("A câmera parou de fornecer quadros. Verifique a conexão.")
         finally:
             fonte.fechar()
 
@@ -189,10 +204,9 @@ class LacoDeMedicao(QThread):
         janela = self.origem.janela
         assert janela is not None
 
-        with mss.MSS() as captura:
-            taxa = self._medir_taxa(captura, janela.regiao)
-        if not self._rodando:
-            return
+        # A janela agora é temporal: o FPS nominal define apenas o alvo da
+        # captura, sem exigir uma medição que desconsidere o custo da análise.
+        taxa = QUADROS_POR_SEGUNDO
 
         monitor = MonitorCardiaco(
             fps=taxa,
