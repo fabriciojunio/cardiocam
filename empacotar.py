@@ -84,6 +84,13 @@ def montar_comando(saida: Path, trabalho: Path) -> list[str]:
         "PySide2",
         "--exclude-module",
         "pytest",
+        # Redes são ferramentas optativas do pacote Python. A interface de
+        # desktop não as importa; dependências instaladas para os testes não
+        # devem entrar pelo coletor de adaptadores opcionais do SciPy.
+        "--exclude-module",
+        "torch",
+        "--exclude-module",
+        "onnx",
         # O Qt traz módulos pesados que este projeto não usa. Tirar os quatro
         # corta algumas centenas de megabytes do executável.
         "--exclude-module",
