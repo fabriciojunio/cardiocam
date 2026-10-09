@@ -29,7 +29,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from cardiocam.qualidade.caracteristicas import Caracteristicas
-from cardiocam.qualidade.extracao import caracteristicas_da_analise
+from cardiocam.qualidade.extracao import caracteristicas_da_analise, caracteristicas_ausentes
 from cardiocam.qualidade.coleta_de_video import ContextoDaJanela, fracao_saturada
 from cardiocam.qualidade.persistencia import Procedencia, carregar_se_houver
 from cardiocam.qualidade.treino import ModeloDeQualidade
@@ -42,14 +42,39 @@ class Veredito:
     probabilidade: float
     limiar: float
     tolerancia_bpm: float
+    calibracao_viavel: bool = True
+    caracteristicas_ausentes: tuple[str, ...] = ()
 
     @property
     def recusa(self) -> bool:
-        return self.probabilidade < self.limiar
+        return not self.calibracao_viavel or self.probabilidade < self.limiar
 
     @property
     def texto(self) -> str:
         return f"qualidade {self.probabilidade:.2f}"
+
+
+def aplicar_qualidade(juiz, quadro: np.ndarray, estado) -> Veredito | None:
+    """Mesma política de publicação para desktop, arquivos e interface OpenCV."""
+    juiz.registrar_quadro(quadro, estado)
+    return aplicar_veredito(juiz, estado)
+
+
+def aplicar_veredito(juiz, estado) -> Veredito | None:
+    """Aplica a decisão já alinhada ao contexto da janela."""
+    veredito = juiz.julgar(estado.analise)
+    if veredito is not None:
+        estado.qualidade = veredito.probabilidade
+        estado.caracteristicas_ausentes = veredito.caracteristicas_ausentes
+        estado.recusada = veredito.recusa
+        if veredito.recusa:
+            estado.bpm_exibido = None
+            estado.codigo_falha = "qualidade_recusada"
+            estado.mensagem = (
+                f"Recusada pelo modelo de qualidade ({veredito.texto})."
+                if veredito.calibracao_viavel else "O modelo não possui calibração viável."
+            )
+    return veredito
 
 
 class JuizDeQualidade:
@@ -92,7 +117,8 @@ class JuizDeQualidade:
         largura = quadro.shape[1] or 1
         self.contexto.registrar(
             estado.amostra.proporcao_pele,
-            fracao_saturada(quadro, estado.caixa),
+            (estado.amostra.fracao_saturada if estado.amostra.fracao_saturada is not None
+             else fracao_saturada(quadro, estado.caixa)),
             (estado.caixa.x + estado.caixa.largura / 2.0) / largura,
             instante=getattr(estado, "instante", None),
             inicio=getattr(estado, "inicio_janela", None),
@@ -124,5 +150,7 @@ class JuizDeQualidade:
             probabilidade=float(probabilidade),
             limiar=float(self.modelo.limiar),
             tolerancia_bpm=float(self.modelo.tolerancia_bpm),
+            calibracao_viavel=self.modelo.calibracao_viavel,
+            caracteristicas_ausentes=caracteristicas_ausentes(analise, self.contexto),
         )
         return self._veredito

@@ -172,15 +172,16 @@ def coletar_de_video(
                 if estado.amostra is not None and estado.caixa is not None:
                     contexto.registrar(
                         estado.amostra.proporcao_pele,
-                        fracao_saturada(quadro, estado.caixa),
+                        (estado.amostra.fracao_saturada if estado.amostra.fracao_saturada is not None
+                         else fracao_saturada(quadro, estado.caixa)),
                         (estado.caixa.x + estado.caixa.largura / 2.0)
                         / max(1, quadro.shape[1]),
                         instante=instante, inicio=estado.inicio_janela,
                     )
 
-                if len(monitor.historico) <= emitidas:
+                if monitor.total_estimativas <= emitidas:
                     continue
-                emitidas = len(monitor.historico)
+                emitidas = monitor.total_estimativas
                 analise = monitor.ultima_analise
                 if analise is None:
                     continue

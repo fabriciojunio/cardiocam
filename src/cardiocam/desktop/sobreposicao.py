@@ -56,6 +56,8 @@ class LeituraNaTela:
     mensagem: str = ""
     pulso: list[float] = field(default_factory=list)
     qualidade: float | None = None
+    instante_analise: float | None = None
+    idade_analise_s: float | None = None
     """Probabilidade que o modelo de abstenção deu a esta janela.
 
     Separada da confiança de propósito: a confiança vem da relação sinal-ruído,

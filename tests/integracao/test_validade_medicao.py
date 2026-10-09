@@ -26,6 +26,7 @@ def monitor(monkeypatch):
     monitor = MonitorCardiaco(
         20.0, ConfiguracaoAnalise(janela_s=3.0, passo_s=0.5),
         detector=DetectorRegiaoFixa(Retangulo(0, 0, 10, 10)), extrator=extrator,
+        detectar_congelamento=False,
     )
     quadro = np.full((20, 20, 3), 100, dtype=np.uint8)
     for i in range(60):
@@ -101,3 +102,27 @@ def test_veredito_nao_muda_quando_contexto_posterior_muda():
     juiz.reiniciar()
     assert not juiz.contexto.pele
     assert juiz._analise_julgada is None
+
+
+def test_historico_limitado_nao_perde_contagem_total(monitor):
+    from collections import deque
+    medidor, quadro, _ = monitor
+    medidor._historico = deque(medidor.historico, maxlen=2)
+    for i in range(60, 140):
+        medidor.processar(quadro, i / 20)
+    assert len(medidor.historico) == 2
+    assert medidor.total_estimativas > 2
+
+
+def test_ausencia_de_fundo_e_diferente_de_correlacao_zero():
+    from cardiocam.qualidade.extracao import caracteristicas_ausentes
+    analise = estimar_de_serie(serie_de(72)).desempacotar()
+    assert "correlacao_com_fundo" in caracteristicas_ausentes(analise)
+    assert "jitter_temporal" not in caracteristicas_ausentes(analise)
+
+
+def test_modelo_sem_calibracao_viavel_recusa_na_interface():
+    analise = estimar_de_serie(serie_de(72)).desempacotar()
+    juiz = JuizDeQualidade(100)
+    juiz.modelo = replace(juiz.modelo, calibracao_viavel=False)
+    assert juiz.julgar(analise).recusa
