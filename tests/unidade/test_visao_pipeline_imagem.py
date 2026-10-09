@@ -261,6 +261,17 @@ def test_rastreador_estabiliza_deteccao_tremida() -> None:
     assert tremor_saida < tremor_entrada
 
 
+def test_novo_alvo_nao_e_interpolado_com_rosto_anterior():
+    anterior = Retangulo(10, 10, 50, 50)
+    novo = Retangulo(200, 100, 50, 50)
+    rastreador = RastreadorRosto(DetectorInstavel([anterior, novo, novo]), tolerancia_quadros=1)
+    quadro = np.zeros((300, 300, 3), np.uint8)
+    rastreador.atualizar(quadro)
+    assert rastreador.atualizar(quadro).desempacotar() == anterior
+    assert rastreador.atualizar(quadro).desempacotar() == novo
+    assert rastreador.contexto_alterado
+
+
 # --------------------------------------------------------------------------
 # Extrator
 # --------------------------------------------------------------------------
