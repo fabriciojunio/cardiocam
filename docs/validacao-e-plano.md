@@ -7,6 +7,20 @@ ECG/PPG sincronizado foi produzido nesta revisão.
 
 ## Evidência de execução
 
+A conclusão das ferramentas restantes acrescentou testes de sinais espaciais,
+consenso, estabilização, codecs reais, redes em CPU, recalibração e transporte.
+A suíte completa passou por **2.453 testes em 773,94 s**, com cobertura de
+**85,63%**, incluindo ramos. Depois da seleção explícita de modelo de qualidade,
+a conferência rápida passou por **2.338 testes em 138,04 s**, com cobertura de
+**84,38%**. Uma correção posterior da entrada de console tem teste próprio com
+`PYTHONIOENCODING=cp1252`. As exclusões de cobertura permanecem declaradas no
+`pyproject.toml`; não houve redução da meta de 80%.
+Essa última conferência, junto com integração de CLI/UI e empacotamento,
+passou por **132 testes em 125,67 s**.
+
+Os números abaixo documentam as etapas anteriores, sem substituir os resultados
+da conclusão:
+
 - A base original passou por 2.252 testes locais.
 - Após as correções de captura, tempo, visão, avaliação e Qt, a suíte completa
   passou por 2.336 testes em 699,95 s, com quatro processos no Windows/Python 3.12.
@@ -44,7 +58,7 @@ uma infraestrutura disponível com validação ou integração ainda pendente.
 | 7 | Preservar a causa real de recusa | Implementado | Código e mensagem do erro, sem atribuir toda falha à luz |
 | 8 | Exportar leituras e recusas com timestamps e acentos | Implementado | CSV com quoting, idade, contexto e características ausentes |
 | 9 | Acompanhar coordenadas dos olhos quando o rosto se move | Implementado | Translação, escala e descarte após redetecção malsucedida |
-| 10 | Renovar regiões e máscaras quando muda o alvo | Parcial | Reset implementado; adaptação de pose e máscara por qualidade pendente |
+| 10 | Renovar regiões e máscaras quando muda o alvo | Experimental | Reset, pele estrita por região e alinhamento por olhos com recusa de inclinação; pose 3D não implementada |
 | 11 | Evitar mistura entre participantes | Parcial | Seleção de área e reset por salto; não há identificação biométrica |
 | 12 | Reiniciar a janela em mudança brusca persistente de alvo | Implementado | Rastreador não interpola a nova caixa a partir da pessoa anterior |
 | 13 | Ler timestamps do quadro efetivamente decodificado | Implementado | Vídeo com taxa variável e fallback temporal testados |
@@ -66,24 +80,32 @@ uma infraestrutura disponível com validação ou integração ainda pendente.
 | 29 | Comparar LGI | Experimental | Testes de frequências conhecidas, ausência de sinal e benchmark sintético |
 | 30 | Comparar OMIT | Experimental | QR temporal da descrição matemática, sem matriz quadrada por duração |
 | 31 | Comparar PBV | Experimental | Variante adaptativa identificada; assinatura calibrada por câmera pendente |
-| 32 | Comparar SSR | Pendente | Precisa de estatísticas espaciais e implementação compatível com a referência |
-| 33 | Comparar FFT, Welch, autocorrelação e rastreamento temporal | Parcial | FFT e detecção por picos existem; ablação reproduzível dos demais pendente |
-| 34 | Selecionar pequenas regiões por qualidade e concordância | Pendente | Requer preservação das séries por região e avaliação com referência |
-| 35 | Estabilizar por landmarks e fluxo óptico | Pendente | Definir dependência, custo e controles contra artefatos periódicos |
-| 36 | Selecionar e fundir métodos adaptativamente | Pendente | SNR maior não prova BPM correto; exige calibração e ablação em participantes separados |
-| 37 | Testar Skin-AE e controle de exposição | Pendente | Câmera precisa aceitar e efetivar os controles; ensaio com referência |
-| 38 | Comparar normalização fotométrica, Retinexformer e Zero-DCE | Pendente | Dados, pesos e licenças; confirmar preservação temporal do pulso |
-| 39 | Comparar redução de ruído e iluminação temporal | Pendente | Medir distorção de pulso e falsa aceitação em vídeos sem sinal |
-| 40 | Avaliar codecs, bitrate, resolução e perda de quadros | Parcial | Guards de continuidade prontos; benchmark de compressão com referência pendente |
-| 41 | Avaliar PhysNet, DeepPhys, EfficientPhys e modelos recentes | Pendente | Dados autorizados, pesos, partições, dependências e custo computacional |
-| 42 | Testar aumento de dados por movimento e iluminação | Pendente | Separar participantes antes do aumento; medir generalização entre datasets |
+| 32 | Comparar SSR | Experimental | Segundo momento espacial, 2SR e controle de frequência conhecida; benchmark em pessoas pendente |
+| 33 | Comparar FFT, Welch, autocorrelação e rastreamento temporal | Experimental | Comparador e rastreador com recusa de inovação e reset; avaliação real pendente |
+| 34 | Selecionar pequenas regiões por qualidade e concordância | Experimental | Séries independentes, pele/saturação, concordância de métodos e exportação; calibração real pendente |
+| 35 | Estabilizar por landmarks e fluxo óptico | Experimental | Centros detectados dos olhos, Lucas–Kanade, ida/volta e RANSAC; controles de translação testados |
+| 36 | Selecionar e fundir métodos adaptativamente | Experimental | Consenso entre métodos e regiões, recusa de ambiguidade e influência do fundo; não prova origem fisiológica |
+| 37 | Testar Skin-AE e controle de exposição | Experimental | Controlador local inspirado em Skin-AE com confirmação do driver; ensaio físico com referência pendente |
+| 38 | Comparar normalização fotométrica, Retinexformer e Zero-DCE | Experimental | Baselines fotométricos, Zero-DCE local e adaptador ONNX; pesos Retinexformer licenciados ausentes |
+| 39 | Comparar redução de ruído e iluminação temporal | Experimental | Regressão pelo fundo, Savitzky–Golay e ablação; controle sintético de preservação de pulso |
+| 40 | Avaliar codecs, bitrate, resolução e perda de quadros | Experimental | FFmpeg codifica H.264/H.265/VP9 e avalia original/variantes; ensaios em videochamada real pendentes |
+| 41 | Avaliar PhysNet, DeepPhys, EfficientPhys e modelos recentes | Experimental | Redes locais, treino por participante, inferência em CPU e adaptador PPG ONNX; pesos e dados reais pendentes |
+| 42 | Testar aumento de dados por movimento e iluminação | Experimental | Perturbações determinísticas com timestamps preservados; teste de generalização entre datasets pendente |
 | 43 | Comparar leituras com ECG/PPG sincronizado | Parcial | Avaliador, manifesto e testes prontos; sessões reais ausentes |
-| 44 | Recalibrar confiança com participantes não vistos | Pendente | Dados reais de treino, calibração e teste sem vazamento |
-| 45 | Prototipar medição no paciente antes da compressão | Parcial | Webcam local existe; transporte, sessões e integração de teleconsulta pendentes |
-| 46 | Investigar região periocular, pupila RGB e video-BCG | Pendente | Experimentos separados com referência; não integrar hipótese ocular como BPM validado |
+| 44 | Recalibrar confiança com participantes não vistos | Experimental | Importação de características com referência, partições explícitas e proteção contra vazamento; dados reais ausentes |
+| 45 | Prototipar medição no paciente antes da compressão | Experimental | Câmera local, fila limitada, sessões consentidas, token, expiração e transporte; serviço remoto/plataformas pendentes |
+| 46 | Investigar região periocular, pupila RGB e video-BCG | Experimental | Séries independentes de pupila e pele periocular, fluxo/PCA para BCG; confirmação fisiológica pendente |
 | 47 | Revisar consentimento, privacidade e limites de uso | Parcial | Propostas e protocolo disponíveis; revisão institucional e avaliação real pendentes |
 
 ## Resultados experimentais disponíveis
+
+A etapa seguinte implementou os comandos descritos em
+[experimentos optativos](experimentos.md). As redes são referências locais
+independentes e os testes de treino usam clipes sintéticos identificados.
+Retinexformer é suportado por adaptador de grafo ONNX, sem pesos incluídos.
+Não houve download de datasets restritos nem cópia de código de repositórios
+com licenças incompatíveis. O modelo de qualidade distribuído permanece
+sintético; o comando de recalibração grava um arquivo novo.
 
 Em 56 cenários de séries sintéticas, LGI e OMIT tiveram MAE arredondado de
 0,02 bpm e nenhuma falha. PBV adaptativo teve MAE de 0,09 bpm entre os casos
@@ -92,6 +114,20 @@ codec, webcam ou participantes. Falhas devem ser relatadas junto com MAE.
 Não justificam substituir os métodos atuais no aplicativo.
 
 ## Distribuição conferida
+
+Os novos artefatos estão em `dist/implementacao-20261009/`. O wheel foi instalado
+em `site-packages` de um ambiente isolado e executou a medição sintética,
+análise experimental de vídeo e transmissão HTTP em loopback. O ambiente não
+tem PyTorch: as dependências neurais continuam optativas. A entrada instalada
+também emitiu UTF-8 com a codificação legada forçada. `pip check` passou.
+
+O executável novo tem 161.660.974 bytes, permaneceu ativo por 20 s com Qt
+offscreen e foi encerrado junto com seu processo filho de teste. Não abriu
+câmera física. O desktop não incorpora as dependências neurais; os comandos
+de pesquisa são distribuídos no pacote Python. Os arquivos de verificação
+identificam os dados como exclusivamente sintéticos.
+
+As verificações anteriores abaixo foram preservadas como histórico:
 
 Os artefatos locais estão em `dist/validacao-20261009/`, fora do versionamento.
 O executável de 144 MiB foi construído com a revisão `7d5092b`, inclui o modelo

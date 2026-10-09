@@ -13,6 +13,14 @@ justamente por exigir as duas metades: detectar e recortar o rosto é
 processamento de imagem; extrair uma oscilação de 1 Hz enterrada em ruído é
 processamento de sinais.
 
+Os [experimentos optativos](docs/experimentos.md) acrescentam SSR, regiões
+independentes, estabilização, comparação de estimadores e consenso, exposição,
+fotometria, compressão, redes neurais, recalibração por participante e
+modalidades oculares/de movimento. O comando `cardiocam teleconsulta camera`
+implementa um protótipo de medição local com transmissão de leituras.
+Esses recursos têm testes de software e permanecem experimentais; a
+[auditoria](docs/validacao-e-plano.md) distingue implementação de validação real.
+
 ## Como funciona
 
 A cada quadro, o sistema faz o caminho abaixo. As três primeiras etapas são
