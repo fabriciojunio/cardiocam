@@ -280,10 +280,15 @@ class JanelaPrincipal(QWidget):
         self.desligar() if self.esta_ligado else self.ligar()
 
     def ligar(self) -> None:
+        if self._laco is not None:
+            return
         self._laco = LacoDeMedicao(self._origem)
+        self._laco.setParent(self)
+        self._parando = False
+        laco = self._laco
         self._laco.leitura_pronta.connect(self._receber)
         self._laco.falhou.connect(self._tratar_falha)
-        self._laco.finished.connect(self._ao_terminar)
+        self._laco.finished.connect(lambda: self._ao_terminar(laco))
         self._laco.start()
 
         self._sobreposicao.atualizar_leitura(
@@ -300,16 +305,29 @@ class JanelaPrincipal(QWidget):
 
     def desligar(self) -> None:
         if self._laco is not None:
+            self._parando = True
             self._laco.parar()
-            self._laco.wait(2500)
-            self._laco = None
+            self._botao.setEnabled(False)
+            self._dizer("Encerrando captura…")
         self._sobreposicao.hide()
+        if self._laco is None:
+            self._pintar_estado(ligado=False)
+            self._dizer("Desligado")
+
+    def _ao_terminar(self, laco=None) -> None:
+        if laco is not None and laco is not self._laco:
+            return
+        terminado = self._laco
+        self._laco = None
+        self._parando = False
+        if terminado is not None:
+            terminado.deleteLater()
+        self._sobreposicao.hide()
+        self._botao.setEnabled(True)
         self._pintar_estado(ligado=False)
         self._dizer("Desligado")
-
-    def _ao_terminar(self) -> None:
-        self._sobreposicao.hide()
-        self._pintar_estado(ligado=False)
+        if getattr(self, "_saindo", False):
+            QApplication.instance().quit()
 
     def _pintar_estado(self, ligado: bool) -> None:
         self._botao.definir_ligado(ligado)
@@ -318,6 +336,8 @@ class JanelaPrincipal(QWidget):
 
     # -------------------------------------------------------------- leitura
     def _receber(self, leitura: LeituraNaTela) -> None:
+        if self._laco is None or getattr(self, "_parando", False):
+            return
         self._sobreposicao.atualizar_leitura(leitura)
         if leitura.bpm is not None and leitura.confianca in ("alta", "média"):
             texto = f"{leitura.bpm:.0f} bpm"
@@ -344,10 +364,12 @@ class JanelaPrincipal(QWidget):
         self.activateWindow()
 
     def _sair(self) -> None:
+        self._saindo = True
         self.desligar()
         self._sobreposicao.close()
         self._bandeja.hide()
-        QApplication.instance().quit()
+        if self._laco is None:
+            QApplication.instance().quit()
 
     def closeEvent(self, evento) -> None:  # noqa: N802
         evento.ignore()
