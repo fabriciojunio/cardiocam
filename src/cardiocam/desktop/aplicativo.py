@@ -255,6 +255,14 @@ class JanelaPrincipal(QWidget):
         camera = QAction("Câmera do computador", self)
         camera.triggered.connect(lambda: self._definir_origem(Origem(camera=0)))
         menu.addAction(camera)
+        if self._origem.janela is not None:
+            selecionar = QAction("Selecionar participante…", self)
+            selecionar.triggered.connect(self._selecionar_participante)
+            menu.addAction(selecionar)
+            if self._origem.area_relativa is not None:
+                inteira = QAction("Medir a janela inteira", self)
+                inteira.triggered.connect(lambda: self._definir_origem(Origem(janela=self._origem.janela)))
+                menu.addAction(inteira)
 
         janelas = listar_janelas()
         if janelas:
@@ -270,6 +278,29 @@ class JanelaPrincipal(QWidget):
     def _definir_origem(self, origem: Origem) -> None:
         self._origem = origem
         self._pintar_origem()
+
+    def _selecionar_participante(self) -> None:
+        import cv2
+        import mss
+        import numpy as np
+        from PySide6.QtWidgets import QDialog
+        from cardiocam.desktop.selecao import SelecionadorRegiao
+        from cardiocam.desktop.janelas import reler
+        from cardiocam.fontes.captura_tela import criar_captura
+
+        janela = reler(self._origem.janela)
+        if janela is None:
+            self._dizer("A janela selecionada não está disponível.")
+            return
+        try:
+            with criar_captura(mss) as captura:
+                quadro = cv2.cvtColor(np.asarray(captura.grab(janela.regiao)), cv2.COLOR_BGRA2BGR)
+        except Exception:
+            self._dizer("Não foi possível visualizar a janela.")
+            return
+        seletor = SelecionadorRegiao(quadro, self)
+        if seletor.exec() == QDialog.Accepted:
+            self._definir_origem(Origem(janela=janela, area_relativa=seletor.imagem.area_relativa))
 
     # --------------------------------------------------------------- ligar
     @property
