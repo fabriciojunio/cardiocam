@@ -7,6 +7,21 @@ import numpy as np
 from cardiocam.qualidade.caracteristicas import Caracteristicas, extrair
 
 
+def caracteristicas_ausentes(analise, contexto=None) -> tuple[str, ...]:
+    """Disponibilidade separada dos valores neutros do vetor legado."""
+    ausentes = []
+    serie = getattr(analise, "serie", None)
+    if serie is None:
+        ausentes.append("desvio_cromatico")
+    if serie is None or serie.fundo is None:
+        ausentes.append("correlacao_com_fundo")
+    if serie is None and getattr(analise, "instantes_originais", None) is None:
+        ausentes.append("jitter_temporal")
+    if contexto is None or not contexto.pele:
+        ausentes.extend(("fracao_de_pele", "fracao_saturada", "deslocamento_roi"))
+    return tuple(ausentes)
+
+
 def caracteristicas_da_analise(analise, serie=None, contexto=None) -> Caracteristicas:
     """Combina o sinal da análise com o contexto dos mesmos quadros.
 

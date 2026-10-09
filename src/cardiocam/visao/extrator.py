@@ -36,6 +36,10 @@ class AmostraQuadro:
     regioes: tuple[Retangulo, ...] = ()
     fundo: tuple[float, float, float] | None = None
     """Média RGB do fundo neste quadro, quando houve fundo utilizável."""
+    luminancia_p05: float | None = None
+    luminancia_mediana: float | None = None
+    luminancia_p95: float | None = None
+    fracao_saturada: float | None = None
 
     def como_vetor(self) -> np.ndarray:
         return np.array([self.vermelho, self.verde, self.azul], dtype=float)
@@ -266,6 +270,8 @@ class ExtratorRGB:
             )
 
         azul, verde, vermelho = pixels.mean(axis=0)
+        luminancia = pixels @ np.array([0.114, 0.587, 0.299])
+        p05, mediana, p95 = np.percentile(luminancia, [5, 50, 95])
         fundo = media_do_fundo(quadro, caixa_rosto) if self.medir_fundo else None
         return Ok(
             AmostraQuadro(
@@ -276,5 +282,9 @@ class ExtratorRGB:
                 proporcao_pele=float(pixels_pele / area_total) if area_total else 0.0,
                 regioes=tuple(regioes),
                 fundo=fundo,
+                luminancia_p05=float(p05),
+                luminancia_mediana=float(mediana),
+                luminancia_p95=float(p95),
+                fracao_saturada=float(np.mean(np.any((pixels <= 1) | (pixels >= 254), axis=1))),
             )
         )

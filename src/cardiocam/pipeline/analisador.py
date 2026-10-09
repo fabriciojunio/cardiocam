@@ -14,6 +14,7 @@ processamento de sinais, e a média RGB é a fronteira entre os dois mundos.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from collections import deque
 
 import numpy as np
 
@@ -36,6 +37,7 @@ from cardiocam.visao.detector_face import DetectorFace, DetectorHaar
 from cardiocam.visao.extrator import AmostraQuadro, ExtratorRGB
 from cardiocam.visao.geometria import Retangulo
 from cardiocam.visao.rastreador import RastreadorRosto
+from cardiocam.visao.continuidade import VigilanteDeQuadros
 
 
 def _rectificar_pelo_fundo(serie: SerieRGB) -> SerieRGB:
@@ -167,6 +169,10 @@ class EstadoQuadro:
     contexto_reiniciado: bool = False
     codigo_falha: str | None = None
     inicio_janela: float | None = None
+    janela_emitida: bool = False
+    qualidade: float | None = None
+    recusada: bool = False
+    caracteristicas_ausentes: tuple[str, ...] = ()
 
     @property
     def idade_analise_s(self) -> float | None:
@@ -195,6 +201,8 @@ class MonitorCardiaco:
         extrator: ExtratorRGB | None = None,
         rastreador: RastreadorRosto | None = None,
         algoritmo: AlgoritmoRPPG | None = None,
+        detectar_congelamento: bool = True,
+        limite_historico: int | None = 3600,
     ) -> None:
         self.config = config or ConfiguracaoAnalise()
         self.algoritmo = algoritmo or criar_algoritmo(self.config.algoritmo)
@@ -210,10 +218,14 @@ class MonitorCardiaco:
 
         self._bpm_suavizado: float | None = None
         self._ultima_analise: AnaliseCompleta | None = None
-        self._historico: list[EstimativaBPM] = []
+        if limite_historico is not None and limite_historico < 1:
+            raise ValueError("O limite do histórico precisa ser positivo.")
+        self._historico: deque[EstimativaBPM] = deque(maxlen=limite_historico)
+        self._total_estimativas = 0
         self._quadros_processados = 0
         self._instante_analise: float | None = None
         self._ultimo_instante: float | None = None
+        self._vigilante = VigilanteDeQuadros() if detectar_congelamento else None
 
     @property
     def bpm_atual(self) -> float | None:
@@ -230,6 +242,10 @@ class MonitorCardiaco:
     @property
     def quadros_processados(self) -> int:
         return self._quadros_processados
+
+    @property
+    def total_estimativas(self) -> int:
+        return self._total_estimativas
 
     def _suavizar(self, bpm: float) -> float:
         """Média exponencial do BPM exibido.
@@ -252,6 +268,8 @@ class MonitorCardiaco:
         self.extrator.reiniciar()
         self._invalidar_leitura()
         self._ultimo_instante = None
+        if self._vigilante is not None:
+            self._vigilante.reiniciar()
 
     def _invalidar_leitura(self) -> None:
         self._bpm_suavizado = None
@@ -281,6 +299,20 @@ class MonitorCardiaco:
                 self.reiniciar()
                 estado.contexto_reiniciado = True
         self._ultimo_instante = instante
+        if quadro is None or quadro.size == 0 or quadro.ndim != 3 or quadro.shape[2] != 3:
+            self.reiniciar()
+            estado.contexto_reiniciado = True
+            estado.codigo_falha = "quadro_invalido"
+            estado.mensagem = "O quadro precisa ser uma imagem BGR válida."
+            return estado
+        if self._vigilante is not None and self._vigilante.congelado(quadro, instante):
+            self.janela.limpar()
+            self.extrator.reiniciar()
+            self._invalidar_leitura()
+            estado.contexto_reiniciado = True
+            estado.codigo_falha = "video_congelado"
+            estado.mensagem = "O vídeo está congelado. Aguardando novos quadros."
+            return estado
         if (self._instante_analise is not None
                 and instante - self._instante_analise > limite_pausa):
             self._invalidar_leitura()
@@ -329,6 +361,7 @@ class MonitorCardiaco:
             return estado
 
         self.janela.marcar_emissao()
+        estado.janela_emitida = True
         resultado = estimar_de_serie(self.janela.serie(), self.config, self.algoritmo)
 
         if resultado.falhou:
@@ -346,6 +379,7 @@ class MonitorCardiaco:
         self._ultima_analise = analise
         self._instante_analise = instante
         self._historico.append(analise.estimativa)
+        self._total_estimativas += 1
         estado.analise = analise
         estado.instante_analise = instante
         estado.nova_analise = True
@@ -362,6 +396,8 @@ class RelatorioSessao:
     quadros_processados: int = 0
     quadros_com_rosto: int = 0
     ultima_analise: AnaliseCompleta | None = None
+    registros: list = field(default_factory=list)
+    historico_limitado: bool = False
 
     @property
     def total_estimativas(self) -> int:
@@ -431,13 +467,24 @@ def analisar_fonte(
         extrator=extrator,
         rastreador=rastreador,
         algoritmo=algoritmo,
+        limite_historico=None,
     )
 
     relatorio = RelatorioSessao()
+    from cardiocam.pipeline.registros import RegistroMedicao
+    from cardiocam.desktop.qualidade_ao_vivo import JuizDeQualidade, aplicar_qualidade
+    juiz = JuizDeQualidade(monitor.janela.capacidade)
     for indice, (quadro, instante) in enumerate(fonte.quadros()):
         if limite_quadros is not None and indice >= limite_quadros:
             break
         estado = monitor.processar(quadro, instante)
+        aplicar_qualidade(juiz, quadro, estado)
+        if estado.janela_emitida or estado.codigo_falha is not None:
+            # Evita repetir um mesmo erro a cada quadro; janelas emitidas
+            # continuam entrando individualmente, mesmo quando falham.
+            if (estado.janela_emitida or not relatorio.registros
+                    or relatorio.registros[-1].codigo_falha != estado.codigo_falha):
+                relatorio.registros.append(RegistroMedicao.do_estado(estado))
         relatorio.quadros_processados += 1
         if estado.tem_rosto:
             relatorio.quadros_com_rosto += 1

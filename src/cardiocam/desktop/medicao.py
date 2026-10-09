@@ -28,7 +28,7 @@ from PySide6.QtCore import QThread, Signal
 
 from cardiocam.desktop.janelas import JanelaDaTela, reler
 from cardiocam.desktop.sobreposicao import LeituraNaTela
-from cardiocam.desktop.qualidade_ao_vivo import JuizDeQualidade
+from cardiocam.desktop.qualidade_ao_vivo import JuizDeQualidade, aplicar_veredito
 from cardiocam.dominio.config import ConfiguracaoAnalise
 from cardiocam.pipeline.analisador import MonitorCardiaco
 
@@ -250,7 +250,7 @@ class LacoDeMedicao(QThread):
     def _publicar(self, estado, juiz: JuizDeQualidade) -> None:
         analise = monitor_analise(estado)
         snr = analise.estimativa.snr_db if analise is not None else None
-        veredito = juiz.julgar(analise)
+        veredito = aplicar_veredito(juiz, estado)
         # `analise.pulso` é um `SinalPulso`, não uma lista: o sinal mora em
         # `.amostras`. Fatiar o objeto direto levantava `not subscriptable` e
         # derrubava a thread **na primeira janela emitida**, que é o pior
@@ -272,13 +272,11 @@ class LacoDeMedicao(QThread):
                 confianca="descartada" if recusado else confianca_de(snr),
                 snr_db=snr,
                 progresso=estado.progresso,
-                mensagem=(
-                    f"Recusada pelo modelo de qualidade ({veredito.texto})."
-                    if recusado
-                    else estado.mensagem
-                ),
+                mensagem=estado.mensagem,
                 pulso=pulso,
                 qualidade=None if veredito is None else veredito.probabilidade,
+                instante_analise=estado.instante_analise,
+                idade_analise_s=estado.idade_analise_s,
             )
         )
 

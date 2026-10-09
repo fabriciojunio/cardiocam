@@ -88,6 +88,7 @@ def salvar(
         "nomes": list(modelo.regressao.nomes),
         "tolerancia_bpm": float(modelo.tolerancia_bpm),
         "limiar": float(modelo.limiar),
+        "calibracao_viavel": modelo.calibracao_viavel,
         "temperatura": float(modelo.temperatura.valor),
         "regressao": {
             "media": [float(v) for v in modelo.regressao.media],
@@ -154,6 +155,7 @@ def carregar(caminho: Path | str = CAMINHO_PADRAO) -> tuple[ModeloDeQualidade, P
         limiar=float(dados["limiar"]),
         tolerancia_bpm=float(dados["tolerancia_bpm"]),
         temperatura=Temperatura(float(dados["temperatura"])),
+        calibracao_viavel=bool(dados.get("calibracao_viavel", True)),
     )
     bruto = dados.get("procedencia", {})
     procedencia = Procedencia(

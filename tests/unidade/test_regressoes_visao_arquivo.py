@@ -59,6 +59,16 @@ def test_alternativa_sem_pele_nao_declara_pele(mascara):
     assert amostra.proporcao_pele == 0
 
 
+def test_diagnostico_mede_pixels_usados_em_vez_do_fundo():
+    quadro = np.full((200, 200, 3), 255, dtype=np.uint8)
+    quadro[50:150, 50:150] = (100, 150, 200)
+    extrator = ExtratorRGB(regiao="rosto_central", ancorar_nos_olhos=False)
+    amostra = extrator.extrair(quadro, Retangulo(50, 50, 100, 100)).desempacotar()
+    assert amostra.luminancia_mediana == pytest.approx(159.25)
+    assert amostra.luminancia_p05 == amostra.luminancia_p95
+    assert amostra.fracao_saturada == 0
+
+
 class CapturaControlada:
     def __init__(self, tempos):
         self.tempos = tempos
