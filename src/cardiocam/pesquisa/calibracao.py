@@ -1,5 +1,6 @@
 """Recalibração com dados reais declarados, separados por participante."""
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -15,6 +16,7 @@ def carregar_amostras(manifesto):
     if dados.get("versao") != 1 or not dados.get("sessoes"):
         raise ValueError("Manifesto de calibração vazio ou desconhecido.")
     amostras, indices, sujeitos, datasets = [], {p: [] for p in ("treino", "calibracao", "teste")}, {}, {}
+    caminhos, conteudos = {}, {}
     for sessao in dados["sessoes"]:
         for chave in ("participante", "dataset", "licenca", "dispositivo", "condicao", "caracteristicas", "particao"):
             if not isinstance(sessao.get(chave), str) or not sessao[chave].strip():
@@ -24,7 +26,12 @@ def carregar_amostras(manifesto):
             raise ValueError("Partição inválida ou participante compartilhado entre partições.")
         sujeitos[pessoa] = parte
         datasets.setdefault(parte, set()).add(sessao["dataset"])
-        relatorio = json.loads((origem.parent / sessao["caracteristicas"]).read_text(encoding="utf-8"))
+        arquivo = (origem.parent / sessao["caracteristicas"]).resolve()
+        if arquivo in caminhos and caminhos[arquivo] != parte:
+            raise ValueError("Arquivo repetido entre partições.")
+        caminhos[arquivo] = parte
+        relatorio = json.loads(arquivo.read_text(encoding="utf-8"))
+        vetores = []
         for linha in relatorio["caracteristicas"]:
             if linha.get("erro_bpm") is None:
                 raise ValueError("Há janela sem referência sincronizada; não é possível rotulá-la.")
@@ -33,8 +40,16 @@ def carregar_amostras(manifesto):
                 raise ValueError("Há características ausentes ou não finitas; colete contexto completo.")
             if linha.get("caracteristicas_ausentes"):
                 raise ValueError("O contexto da janela está incompleto.")
+            vetores.append(valores)
             indices[parte].append(len(amostras))
             amostras.append(Amostra(Caracteristicas(*valores), float(linha["erro_bpm"]), pessoa))
+        if not vetores:
+            raise ValueError("Sessão sem janelas de características.")
+        matriz = np.asarray(vetores, dtype=np.float64)
+        digest = hashlib.sha256(str(matriz.shape).encode() + matriz.tobytes()).hexdigest()
+        if digest in conteudos and conteudos[digest] != parte:
+            raise ValueError("Arquivo repetido entre partições: características idênticas.")
+        conteudos[digest] = parte
     if any(not indices[p] for p in indices):
         raise ValueError("Treino, calibração e teste precisam conter janelas.")
     if dados.get("teste_dataset_inedito", False) and datasets["teste"] & (datasets["treino"] | datasets["calibracao"]):
