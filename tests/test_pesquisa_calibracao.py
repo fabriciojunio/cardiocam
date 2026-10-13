@@ -17,7 +17,7 @@ def manifesto_em(tmp_path):
         linhas = []
         for j in range(20):
             bom = j % 2 == 0
-            vetor = [15 if bom else -5, 8 if bom else 1, .2 if bom else .9, .1,
+            vetor = [(15 if bom else -5) + i * .1, 8 if bom else 1, .2 if bom else .9, .1,
                      1 if bom else 15, .9, .01, .01, .1, .01, .1]
             linhas.append({**dict(zip(Caracteristicas.nomes(), vetor)), "erro_bpm": 1 if bom else 20,
                            "caracteristicas_ausentes": []})
@@ -71,6 +71,29 @@ def test_particao_explicitamente_nao_pode_repetir_indices(tmp_path):
     amostras, p, _ = carregar_amostras(manifesto_em(tmp_path))
     with pytest.raises(ValueError): treinar(amostras, particao=Particao(p.treino, p.calibracao, p.treino))
     with pytest.raises(ValueError): treinar(amostras, particao=Particao(np.arange(30), np.arange(30, 40), np.arange(40, 60)))
+
+
+@pytest.mark.parametrize("copiar", [False, True])
+def test_recalibracao_rejeita_mesmo_arquivo_com_participante_renomeado(tmp_path, copiar):
+    origem = manifesto_em(tmp_path)
+    dados = json.loads(origem.read_text(encoding="utf-8"))
+    if copiar:
+        (tmp_path / "teste.json").write_bytes((tmp_path / "treino.json").read_bytes())
+    else:
+        dados["sessoes"][2]["caracteristicas"] = "treino.json"
+    origem.write_text(json.dumps(dados), encoding="utf-8")
+    with pytest.raises(ValueError, match="Arquivo repetido entre partições"):
+        carregar_amostras(origem)
+
+
+def test_recalibracao_rejeita_mesmas_caracteristicas_com_rotulos_diferentes(tmp_path):
+    origem = manifesto_em(tmp_path)
+    treino = json.loads((tmp_path / "treino.json").read_text(encoding="utf-8"))
+    for linha in treino["caracteristicas"]:
+        linha["erro_bpm"] += 1
+    (tmp_path / "teste.json").write_text(json.dumps(treino, indent=2), encoding="utf-8")
+    with pytest.raises(ValueError, match="Arquivo repetido entre partições"):
+        carregar_amostras(origem)
 
 
 def test_modelo_recusa_booleano_textual(tmp_path):

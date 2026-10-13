@@ -139,9 +139,10 @@ def test_treino_completo_seleciona_na_calibracao_e_grava_pesos(torch_cpu, tmp_pa
     clipes = []
     for i, parte in enumerate(("treino", "calibracao", "teste")):
         t = np.arange(12)/20
+        frequencia = 1.2 + i * .1
         video = np.empty((12, 36, 36, 3), np.uint8)
-        for j in range(12): video[j] = np.round([180, 130+8*np.sin(2*np.pi*1.2*t[j]), 80])
-        np.savez(tmp_path / (parte+".npz"), video=video, ppg=np.sin(2*np.pi*1.2*t), fps=20)
+        for j in range(12): video[j] = np.round([180, 130+8*np.sin(2*np.pi*frequencia*t[j]), 80])
+        np.savez(tmp_path / (parte+".npz"), video=video, ppg=np.sin(2*np.pi*frequencia*t), fps=20)
         clipes.append({"participante": f"p{i}", "particao": parte, "dataset": "controle_sintetico",
                        "licenca": "Fixture sintética", "arquivo": parte+".npz"})
     manifesto = tmp_path / "dados.json"

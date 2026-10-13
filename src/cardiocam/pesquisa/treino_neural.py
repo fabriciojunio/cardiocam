@@ -1,5 +1,6 @@
 """Treino de referência com onda PPG e seleção na calibração, nunca no teste."""
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -15,6 +16,7 @@ def carregar_clipes(manifesto):
         raise ValueError("Manifesto neural vazio ou desconhecido.")
     partes = {p: [] for p in ("treino", "calibracao", "teste")}
     sujeitos = {}
+    caminhos, videos = {}, {}
     for clip in dados["clipes"]:
         for chave in ("participante", "particao", "dataset", "licenca", "arquivo"):
             if not isinstance(clip.get(chave), str) or not clip[chave].strip():
@@ -23,7 +25,11 @@ def carregar_clipes(manifesto):
         if parte not in partes or (pessoa in sujeitos and sujeitos[pessoa] != parte):
             raise ValueError("Participante compartilhado ou partição desconhecida.")
         sujeitos[pessoa] = parte
-        with np.load(origem.parent / clip["arquivo"], allow_pickle=False) as arquivo:
+        caminho = (origem.parent / clip["arquivo"]).resolve()
+        if caminho in caminhos and caminhos[caminho] != parte:
+            raise ValueError("Arquivo repetido entre partições.")
+        caminhos[caminho] = parte
+        with np.load(caminho, allow_pickle=False) as arquivo:
             video, ppg = arquivo["video"].copy(), arquivo["ppg"].astype(np.float32)
             fps = float(arquivo["fps"])
         if (video.ndim != 4 or video.shape[-1] != 3 or video.dtype != np.uint8
@@ -31,6 +37,12 @@ def carregar_clipes(manifesto):
                 or not np.isfinite(ppg).all() or np.std(ppg) < 1e-6
                 or not np.isfinite(fps) or fps < 8):
             raise ValueError("Clipe exige vídeo RGB uint8, onda PPG sincronizada variável e FPS válido.")
+        identidade = hashlib.sha256(str(video.shape).encode())
+        identidade.update(memoryview(video).cast("B"))
+        digest = identidade.hexdigest()
+        if digest in videos and videos[digest] != parte:
+            raise ValueError("Arquivo repetido entre partições: vídeo idêntico.")
+        videos[digest] = parte
         partes[parte].append((video, ppg, fps, clip))
     if any(not p for p in partes.values()):
         raise ValueError("As três partições precisam de clipes.")

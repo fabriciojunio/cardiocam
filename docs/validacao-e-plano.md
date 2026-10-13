@@ -167,6 +167,22 @@ A meta de 80% foi mantida. Essa execução confirma os testes e ambientes
 declarados; não substitui avaliação com participantes, câmeras físicas ou
 referência ECG/PPG sincronizada.
 
+## Integridade das partições em 13/10/2026
+
+Os loaders de recalibração e treino neural recusam reutilização do mesmo
+arquivo entre treino, calibração e teste, mesmo com participante renomeado.
+A identidade das características ou dos quadros decodificados também é
+verificada; mudar rótulos, compressão NPZ ou formatação JSON não torna a
+amostra independente. A guarda cobre duplicatas exatas, não trechos
+parcialmente sobrepostos ou metadados de participante incorretos.
+
+A execução serial local dos três arquivos `test_pesquisa_calibracao.py`,
+`test_pesquisa_particoes.py` e `test_pesquisa_redes.py` aprovou 33 testes em
+13/10/2026, sem as falhas de memória observadas nas tentativas anteriores.
+As fixtures são sintéticas; esse resultado verifica a integridade do software,
+não a validade de uma medição clínica. A suíte remota acima pertence à revisão
+histórica indicada e será medida novamente na integração contínua.
+
 ## Ordem de continuação
 
 1. Obter sessões autorizadas com referência sincronizada e procedência.
