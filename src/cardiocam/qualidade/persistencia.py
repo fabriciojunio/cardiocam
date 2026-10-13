@@ -60,13 +60,15 @@ class Procedencia:
     observacao: str = ""
 
     def como_dicionario(self) -> dict:
+        def numero(valor):
+            return float(valor) if valor is not None and np.isfinite(valor) else None
         return {
             "treinado_em": self.treinado_em,
             "janelas": self.janelas,
             "bateria": self.bateria,
-            "erro_respondendo_sempre": self.erro_respondendo_sempre,
-            "erro_com_abstencao": self.erro_com_abstencao,
-            "cobertura": self.cobertura,
+            "erro_respondendo_sempre": numero(self.erro_respondendo_sempre),
+            "erro_com_abstencao": numero(self.erro_com_abstencao),
+            "cobertura": numero(self.cobertura),
             "observacao": self.observacao,
         }
 
@@ -88,6 +90,7 @@ def salvar(
         "nomes": list(modelo.regressao.nomes),
         "tolerancia_bpm": float(modelo.tolerancia_bpm),
         "limiar": float(modelo.limiar),
+        "calibracao_viavel": modelo.calibracao_viavel,
         "temperatura": float(modelo.temperatura.valor),
         "regressao": {
             "media": [float(v) for v in modelo.regressao.media],
@@ -101,7 +104,7 @@ def salvar(
     }
     destino.parent.mkdir(parents=True, exist_ok=True)
     destino.write_text(
-        json.dumps(conteudo, ensure_ascii=False, indent=1) + "\n", encoding="utf-8"
+        json.dumps(conteudo, ensure_ascii=False, allow_nan=False, indent=1) + "\n", encoding="utf-8"
     )
     return destino
 
@@ -116,6 +119,8 @@ def carregar(caminho: Path | str = CAMINHO_PADRAO) -> tuple[ModeloDeQualidade, P
     """
     origem = Path(caminho)
     dados = json.loads(origem.read_text(encoding="utf-8"))
+    if type(dados.get("calibracao_viavel", True)) is not bool:
+        raise ValueError("calibracao_viavel precisa ser booleana.")
 
     if dados.get("versao") != VERSAO_DO_FORMATO:
         raise ValueError(
@@ -154,15 +159,16 @@ def carregar(caminho: Path | str = CAMINHO_PADRAO) -> tuple[ModeloDeQualidade, P
         limiar=float(dados["limiar"]),
         tolerancia_bpm=float(dados["tolerancia_bpm"]),
         temperatura=Temperatura(float(dados["temperatura"])),
+        calibracao_viavel=bool(dados.get("calibracao_viavel", True)),
     )
     bruto = dados.get("procedencia", {})
     procedencia = Procedencia(
         treinado_em=bruto.get("treinado_em", "desconhecido"),
         janelas=int(bruto.get("janelas", 0)),
         bateria=bruto.get("bateria", "desconhecida"),
-        erro_respondendo_sempre=float(bruto.get("erro_respondendo_sempre", float("nan"))),
-        erro_com_abstencao=float(bruto.get("erro_com_abstencao", float("nan"))),
-        cobertura=float(bruto.get("cobertura", float("nan"))),
+        erro_respondendo_sempre=float(bruto["erro_respondendo_sempre"]) if bruto.get("erro_respondendo_sempre") is not None else float("nan"),
+        erro_com_abstencao=float(bruto["erro_com_abstencao"]) if bruto.get("erro_com_abstencao") is not None else float("nan"),
+        cobertura=float(bruto["cobertura"]) if bruto.get("cobertura") is not None else float("nan"),
         observacao=bruto.get("observacao", ""),
     )
     return modelo, procedencia

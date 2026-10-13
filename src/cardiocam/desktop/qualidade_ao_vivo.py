@@ -28,9 +28,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from cardiocam.qualidade.caracteristicas import Caracteristicas, extrair
+from cardiocam.qualidade.caracteristicas import Caracteristicas
+from cardiocam.qualidade.extracao import caracteristicas_da_analise, caracteristicas_ausentes
 from cardiocam.qualidade.coleta_de_video import ContextoDaJanela, fracao_saturada
-from cardiocam.qualidade.persistencia import Procedencia, carregar_se_houver
+from cardiocam.qualidade.persistencia import Procedencia, carregar, carregar_se_houver
 from cardiocam.qualidade.treino import ModeloDeQualidade
 
 
@@ -41,14 +42,45 @@ class Veredito:
     probabilidade: float
     limiar: float
     tolerancia_bpm: float
+    calibracao_viavel: bool = True
+    caracteristicas_ausentes: tuple[str, ...] = ()
+    motivo_falha: str | None = None
 
     @property
     def recusa(self) -> bool:
-        return self.probabilidade < self.limiar
+        return (self.motivo_falha is not None or not self.calibracao_viavel
+                or self.probabilidade < self.limiar)
 
     @property
     def texto(self) -> str:
         return f"qualidade {self.probabilidade:.2f}"
+
+
+def aplicar_qualidade(juiz, quadro: np.ndarray, estado) -> Veredito | None:
+    """Mesma política de publicação para desktop, arquivos e interface OpenCV."""
+    juiz.registrar_quadro(quadro, estado)
+    return aplicar_veredito(juiz, estado)
+
+
+def aplicar_veredito(juiz, estado) -> Veredito | None:
+    """Aplica a decisão já alinhada ao contexto da janela."""
+    veredito = juiz.julgar(estado.analise)
+    if veredito is not None:
+        estado.qualidade = veredito.probabilidade
+        estado.caracteristicas_ausentes = veredito.caracteristicas_ausentes
+        estado.recusada = veredito.recusa
+        if veredito.recusa:
+            estado.bpm_exibido = None
+            estado.codigo_falha = "qualidade_recusada"
+            estado.mensagem = (
+                f"Recusada pelo modelo de qualidade ({veredito.texto})."
+                if veredito.calibracao_viavel else "O modelo não possui calibração viável."
+            )
+            if veredito.motivo_falha is not None:
+                estado.qualidade = None
+                estado.codigo_falha = "qualidade_indisponivel"
+                estado.mensagem = veredito.motivo_falha
+    return veredito
 
 
 class JuizDeQualidade:
@@ -60,11 +92,19 @@ class JuizDeQualidade:
     existiu.
     """
 
-    def __init__(self, capacidade_da_janela: int) -> None:
-        carregado = carregar_se_houver()
+    def __init__(self, capacidade_da_janela: int, caminho_modelo: str | None = None) -> None:
+        # Modelo explicitamente escolhido não pode cair no fallback em silêncio.
+        carregado = carregar(caminho_modelo) if caminho_modelo is not None else carregar_se_houver()
         self.modelo: ModeloDeQualidade | None = carregado[0] if carregado else None
         self.procedencia: Procedencia | None = carregado[1] if carregado else None
         self.contexto = ContextoDaJanela(capacidade=max(1, capacidade_da_janela))
+        self._analise_julgada = None
+        self._veredito: Veredito | None = None
+
+    def reiniciar(self) -> None:
+        self.contexto.limpar()
+        self._analise_julgada = None
+        self._veredito = None
 
     @property
     def disponivel(self) -> bool:
@@ -77,43 +117,50 @@ class JuizDeQualidade:
         emitem janela: as características de imagem descrevem o conjunto de
         quadros que formou a estimativa, e não o último deles.
         """
+        if getattr(estado, "contexto_reiniciado", False):
+            self.reiniciar()
         if estado.amostra is None or estado.caixa is None:
             return
         largura = quadro.shape[1] or 1
         self.contexto.registrar(
             estado.amostra.proporcao_pele,
-            fracao_saturada(quadro, estado.caixa),
+            (estado.amostra.fracao_saturada if estado.amostra.fracao_saturada is not None
+             else fracao_saturada(quadro, estado.caixa)),
             (estado.caixa.x + estado.caixa.largura / 2.0) / largura,
+            instante=getattr(estado, "instante", None),
+            inicio=getattr(estado, "inicio_janela", None),
         )
 
     def caracteristicas(self, analise) -> Caracteristicas:
-        return extrair(
-            pulso=analise.pulso,
-            espectro=analise.espectro,
-            frequencia_hz=analise.estimativa.frequencia_hz,
-            snr_db=analise.estimativa.snr_db,
-            fracao_de_pele=self.contexto.media_de_pele(),
-            fracao_saturada=self.contexto.media_saturada(),
-            posicoes_roi=self.contexto.deslocamento(),
-        )
+        return caracteristicas_da_analise(analise, contexto=self.contexto)
 
     def julgar(self, analise) -> Veredito | None:
         """Probabilidade de a estimativa estar dentro da tolerância.
 
-        Devolve `None` quando não há modelo, e também quando a extração falha:
-        característica que não pôde ser calculada vira recusa silenciosa se
-        entrar como zero, e recusa silenciosa é pior que ausência de veredito.
+        Devolve `None` quando não há modelo. Se um modelo disponível falhar,
+        recusa explicitamente; a falha não autoriza publicar uma leitura.
         """
         if self.modelo is None or analise is None:
             return None
+        if analise is self._analise_julgada:
+            return self._veredito
+        self._analise_julgada = analise
+        self._veredito = None
         try:
             probabilidade = self.modelo.probabilidade(self.caracteristicas(analise))
         except (ValueError, FloatingPointError):
-            return None
-        if not np.isfinite(probabilidade):
-            return None
-        return Veredito(
+            probabilidade = float("nan")
+        if not np.isfinite(probabilidade) or not 0 <= probabilidade <= 1:
+            self._veredito = Veredito(
+                0.0, self.modelo.limiar, self.modelo.tolerancia_bpm,
+                motivo_falha="Não foi possível avaliar a qualidade desta janela.",
+            )
+            return self._veredito
+        self._veredito = Veredito(
             probabilidade=float(probabilidade),
             limiar=float(self.modelo.limiar),
             tolerancia_bpm=float(self.modelo.tolerancia_bpm),
+            calibracao_viavel=self.modelo.calibracao_viavel,
+            caracteristicas_ausentes=caracteristicas_ausentes(analise, self.contexto),
         )
+        return self._veredito

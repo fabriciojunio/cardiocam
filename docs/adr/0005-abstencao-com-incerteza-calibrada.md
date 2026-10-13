@@ -154,6 +154,16 @@ pouca dispersão no treino, e um artefato semanticamente novo pode cair numa
 região do espaço de características que o treino cobre bem. Incerteza sobre os
 pesos não é incerteza sobre o fenômeno.
 
+## Atualização da implementação em 09/10/2026
+
+Quando nenhum limiar atende às metas de calibração, o treinamento marca
+`calibracao_viavel=False` e o aplicativo recusa as leituras desse modelo.
+Uma falha ou probabilidade inválida de um modelo disponível também impede a
+publicação. O veredito é calculado uma vez por análise, usando contexto da
+mesma janela. As características ausentes são identificadas nos registros.
+Essas mudanças corrigem o comportamento do programa, sem constituir nova
+calibração em participantes reais.
+
 ## Alternativas descartadas
 
 **Limiar fixo de relação sinal-ruído**, que o sistema já tinha. Continua, como

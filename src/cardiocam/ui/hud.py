@@ -196,7 +196,7 @@ def compor(quadro: np.ndarray, estado: EstadoQuadro, pincel: PincelTexto) -> np.
         if np.isfinite(hrv.sdnn_ms):
             itens.append(
                 ItemTexto(
-                    f"Variabilidade: {hrv.sdnn_ms:.0f} ms", (16, linha), 16, COR_APAGADA
+                    f"Variabilidade experimental: {hrv.sdnn_ms:.0f} ms", (16, linha), 16, COR_APAGADA
                 )
             )
             linha += 22

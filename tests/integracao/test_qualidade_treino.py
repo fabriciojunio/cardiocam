@@ -174,8 +174,8 @@ class TestTreino:
         with pytest.raises(ValueError, match="Abaixo de uma dezena"):
             treinar(amostras)
 
-    def test_sem_limiar_viavel_adota_responder_sempre(self):
-        """O limiar 0 é resultado, não falha: nenhum ponto atendeu ao pedido.
+    def test_sem_limiar_viavel_recusa_leituras(self):
+        """Nenhum ponto atendeu ao pedido, então o modelo não aceita leituras.
 
         Pede cobertura de 90% com erro de 0,1 bpm, que o conjunto não entrega
         em limiar nenhum.
@@ -183,8 +183,9 @@ class TestTreino:
         relatorio = treinar(
             self._mistura(), cobertura_minima=0.9, erro_alvo_bpm=0.1
         )
-        assert relatorio.modelo.limiar == 0.0
-        assert relatorio.ponto_adotado.cobertura == 1.0
+        assert not relatorio.modelo.calibracao_viavel
+        assert relatorio.ponto_adotado.cobertura == 0.0
+        assert not relatorio.modelo.aceita(self._mistura()[0].caracteristicas)
 
     def test_o_rotulo_segue_a_tolerancia_pedida(self):
         amostra = _amostra(10.0, 2.5, "g")
