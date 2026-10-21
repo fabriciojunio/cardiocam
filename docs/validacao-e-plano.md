@@ -1,5 +1,21 @@
 # Auditoria e plano de evolução do Cardiocam
 
+## Verificação de transporte em 21/10/2026
+
+A rejeição de requisições HTTP podia fechar a conexão com o corpo ainda por
+ler, causando interrupção de transporte no Windows em vez da resposta de erro.
+O receptor agora encerra a escrita depois da resposta e drena a entrada com
+limites de 200 ms e 64 KiB. O limite de aceitação continua em 2.048 bytes;
+corpos excedentes, comprimentos duplicados e Transfer-Encoding são recusados.
+
+Os 25 testes de teleconsulta passaram em 16,69 s. A suíte rápida completa
+(`pytest -m "not lento" -n 2`) passou por 2.354 testes em 278,68 s no Windows
+com Python 3.12. Essa execução não mede cobertura, não inclui os testes lentos
+e não constitui validação clínica. A suíte completa e os demais ambientes
+continuam sujeitos à integração contínua.
+
+## Histórico de 09/10/2026
+
 Revisão de 09/10/2026 sobre a base `b318243` e a branch local
 `fix/validade-medicao`. As alterações corrigem o comportamento do software;
 não demonstram precisão em pessoas ou uso clínico. Nenhum resultado real com

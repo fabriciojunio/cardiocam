@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import math
 import secrets
+import socket
 import threading
 import time
 from urllib.parse import urlsplit
@@ -95,6 +96,9 @@ def criar_servidor(sessao, porta=0):
                 if self.path != "/leituras":
                     status = 404
                 else:
+                    if (self.headers.get("Transfer-Encoding") is not None
+                            or len(self.headers.get_all("Content-Length", [])) != 1):
+                        raise ValueError("Enquadramento HTTP inválido.")
                     tamanho = int(self.headers.get("Content-Length", "0"))
                     if not 0 < tamanho <= 2048 or self.headers.get_content_type() != "application/json":
                         raise ValueError("Corpo inválido.")
@@ -109,7 +113,29 @@ def criar_servidor(sessao, porta=0):
             self.send_response(status)
             self.send_header("Content-Length", "0")
             self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
             self.end_headers()
+            self.close_connection = True
+            if status >= 400:
+                # Fechar com corpo ainda no socket pode descartar a resposta no
+                # Windows. Enviamos o fim da resposta antes de drenar a entrada,
+                # com limites de tempo e bytes mesmo se o cliente não encerrar.
+                self.wfile.flush()
+                try:
+                    self.connection.shutdown(socket.SHUT_WR)
+                    prazo = time.monotonic() + .2
+                    restante = 65536
+                    while restante > 0:
+                        espera = prazo - time.monotonic()
+                        if espera <= 0:
+                            break
+                        self.connection.settimeout(espera)
+                        bloco = self.rfile.read1(min(restante, 8192))
+                        if not bloco:
+                            break
+                        restante -= len(bloco)
+                except OSError:
+                    pass  # O cliente pode já ter fechado a conexão.
     servidor = ThreadingHTTPServer(("127.0.0.1", porta), Receptor)
     servidor.daemon_threads = True
     return servidor
