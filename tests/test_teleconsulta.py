@@ -2,6 +2,8 @@
 
 from urllib.error import HTTPError
 import json
+import socket
+from http.client import HTTPResponse
 from urllib.request import Request, urlopen
 
 import pytest
@@ -65,6 +67,42 @@ def test_http_rejeita_corpo_grande_tipo_errado_e_rota():
             req = Request(destino, data=corpo, headers={"Content-Type": tipo, "Authorization": "Bearer "+TOKEN})
             with pytest.raises(HTTPError) as erro: urlopen(req, timeout=3)
             assert erro.value.code == status
+
+
+@pytest.mark.parametrize("cabecalhos,corpo", [
+    ("Content-Length: 2049\r\n", b"x" * 2049),
+    ("Content-Length: -1\r\n", b""),
+    ("Content-Length: incorreto\r\n", b"{}"),
+    ("Content-Length: 2\r\nContent-Length: 3\r\n", b"{}"),
+    ("Transfer-Encoding: chunked\r\nContent-Length: 2\r\n", b"{}"),
+])
+def test_http_recusa_enquadramento_invalido_sem_registrar_leitura(cabecalhos, corpo):
+    from urllib.parse import urlsplit
+    sessao = SessaoTelemetria("participante-01", TOKEN, True)
+    with receptor_local(sessao) as url:
+        with socket.create_connection(("127.0.0.1", urlsplit(url).port), timeout=3) as cliente:
+            cliente.sendall(("POST /leituras HTTP/1.1\r\nHost: localhost\r\n"
+                "Content-Type: application/json\r\nAuthorization: Bearer " + TOKEN
+                + "\r\n" + cabecalhos + "\r\n").encode("ascii") + corpo)
+            with HTTPResponse(cliente) as resposta:
+                resposta.begin()
+                assert resposta.status == 400
+                assert resposta.getheader("Connection") == "close"
+                assert resposta.read() == b""
+        assert sessao.leituras() == []
+        enviar(url, TOKEN, leitura(), True)
+        assert len(sessao.leituras()) == 1
+
+
+def test_http_aceita_corpo_no_limite():
+    sessao = SessaoTelemetria("participante-01", TOKEN, True)
+    with receptor_local(sessao) as url:
+        corpo = json.dumps(leitura()).encode("utf-8").ljust(2048, b" ")
+        pedido = Request(url, data=corpo, headers={"Content-Type": "application/json",
+                         "Authorization": "Bearer " + TOKEN})
+        with urlopen(pedido, timeout=3) as resposta:
+            assert resposta.status == 204
+        assert len(sessao.leituras()) == 1
 
 
 def test_transmissor_assincrono_nao_acumula_leituras_antigas():
