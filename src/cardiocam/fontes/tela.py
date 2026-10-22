@@ -29,6 +29,7 @@ import numpy as np
 from cardiocam.dominio.erros import FonteIndisponivel
 from cardiocam.dominio.resultado import Falha, Ok, Resultado
 from cardiocam.fontes.base import Quadro
+from cardiocam.fontes.captura_tela import criar_captura
 
 try:
     import mss
@@ -70,7 +71,7 @@ class FonteTela:
                 )
             )
         try:
-            self._captura = mss.mss()
+            self._captura = criar_captura(mss)
         except Exception as causa:  # noqa: BLE001 - fronteira com o sistema gráfico
             erro = FonteIndisponivel(
                 "Não foi possível acessar a tela. Em Linux, confira se há "
