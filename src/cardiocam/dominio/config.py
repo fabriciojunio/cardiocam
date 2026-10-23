@@ -48,6 +48,9 @@ class ConfiguracaoAnalise:
     ganho diferente por canal e escapa dessa projeção. Como o fundo não tem
     pulso, ele mede a perturbação diretamente."""
 
+    modelo_qualidade: str | None = None
+    """Modelo optativo verificado; None conserva o modelo distribuído."""
+
     def amostras_por_janela(self, fps: float) -> int:
         return max(2, int(round(self.janela_s * fps)))
 

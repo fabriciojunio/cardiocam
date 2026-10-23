@@ -1,5 +1,10 @@
 # Como funciona a IC na UNESP, e o que falta depois que você entrar
 
+> Revisão de 22/10/2026: confirmar requisitos acadêmicos no edital vigente e
+> procedimentos éticos com a instituição. Este material não comprova aceite de
+> orientador, seleção, aprovação ética ou elegibilidade. Para submissão de
+> pesquisa, prevalece o [roteiro atualizado](06-etica-plataforma-brasil.md).
+
 ## Não existe banca
 
 Vale corrigir isso primeiro, porque muda a expectativa. Iniciação científica não
@@ -21,11 +26,11 @@ Científica**, e as duas coisas são condição do certificado.
    não por você. Na modalidade voluntária é fluxo contínuo: qualquer época do
    ano, sem esperar edital.
 3. **Avaliação pela CPP** da unidade.
-4. **Submissão ao CEP pela Plataforma Brasil**, em paralelo. Pesquisa com
-   pessoas não começa antes do parecer aprovado. O projeto precisa estar
-   registrado na plataforma **ao menos 30 dias antes** da reunião do comitê.
-5. **Execução.** As camadas 1 e 2 do método (sintética e dados públicos) não
-   dependem do CEP e começam no mês 1.
+4. **Submissão ao CEP pelo sistema indicado pela instituição**, em paralelo.
+   Coleta com pessoas depende de aprovação prévia. Confirmar calendário e
+   requisitos no [roteiro ético](06-etica-plataforma-brasil.md).
+5. **Execução.** Simulações sem dados pessoais podem começar no mês 1.
+   O uso secundário de dados públicos exige análise de licença e enquadramento.
 6. **Relatório parcial**, conforme o calendário da unidade.
 7. **Relatório final**, que precisa ser **aprovado**.
 8. **Apresentação no CIC** ou em outro evento científico, com comprovação.

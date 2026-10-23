@@ -259,3 +259,34 @@ def reler(janela: JanelaDaTela) -> JanelaDaTela | None:
         return None
     return JanelaDaTela(janela.identificador, _titulo(janela.identificador) or janela.titulo,
                         x, y, largura, altura)
+
+
+def _janela_na_posicao(x: int, y: int) -> int:
+    usuario = ctypes.windll.user32
+    usuario.WindowFromPoint.argtypes = [wintypes.POINT]
+    usuario.WindowFromPoint.restype = wintypes.HWND
+    usuario.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+    usuario.GetAncestor.restype = wintypes.HWND
+    janela = usuario.WindowFromPoint(wintypes.POINT(x, y))
+    return int(usuario.GetAncestor(janela, 2) or janela or 0)
+
+
+def area_coberta(janela: JanelaDaTela, area_relativa=None) -> bool | None:
+    """Verifica pontos centrais da área; não prova visibilidade de cada pixel.
+
+    Devolve None quando a verificação não é suportada. Pequenas oclusões fora
+    dos pontos amostrados ainda precisam ser identificadas pela qualidade.
+    """
+    if not NO_WINDOWS:
+        return None
+    x0, y0, x1, y1 = area_relativa or (0, 0, 1, 1)
+    pontos = ((.5, .5), (.35, .5), (.65, .5), (.5, .35), (.5, .65))
+    try:
+        outras = 0
+        for u, v in pontos:
+            x = round(janela.x + (x0 + u * (x1 - x0)) * janela.largura)
+            y = round(janela.y + (y0 + v * (y1 - y0)) * janela.altura)
+            outras += _janela_na_posicao(x, y) != janela.identificador
+        return outras >= 2
+    except (AttributeError, OSError):
+        return None

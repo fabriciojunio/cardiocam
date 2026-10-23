@@ -9,27 +9,26 @@ inteiro travou.
 A comunicação de volta é por sinal do Qt, que é a forma segura de atravessar
 thread: a interface nunca lê o estado do medidor diretamente.
 
-**Duas decisões sobre não piorar a imagem.** A captura é feita na resolução
-nativa da tela, sem redimensionar nada antes da análise, e os pixels vão para o
-pipeline como vieram. A única redução que existe é a que o próprio detector faz
-internamente para procurar o rosto, e ela não toca nos pixels de onde a cor é
-medida.
+A captura começa na resolução nativa da tela. A área escolhida é recortada e
+reduzida com média espacial quando ultrapassa o teto de largura do pipeline.
 """
 
 from __future__ import annotations
 
 import time
+from threading import Event
 from dataclasses import dataclass
 
 import cv2
 import numpy as np
 from PySide6.QtCore import QThread, Signal
 
-from cardiocam.desktop.janelas import JanelaDaTela, reler
+from cardiocam.desktop.janelas import JanelaDaTela, reler, area_coberta
 from cardiocam.desktop.sobreposicao import LeituraNaTela
-from cardiocam.desktop.qualidade_ao_vivo import JuizDeQualidade
+from cardiocam.desktop.qualidade_ao_vivo import JuizDeQualidade, aplicar_veredito
 from cardiocam.dominio.config import ConfiguracaoAnalise
 from cardiocam.pipeline.analisador import MonitorCardiaco
+from cardiocam.fontes.captura_tela import criar_captura
 
 # A taxa que o laço tenta sustentar. Vinte é o mesmo alvo da versão web, e pelo
 # mesmo motivo medido: a banda cardíaca vai a 3,3 Hz, então vinte são três vezes
@@ -67,15 +66,6 @@ LARGURA_MAXIMA_DA_TELA = 1280
 # quadros, que é a mesma razão pela qual o padrão já é maior que 1.
 DETECCAO_A_CADA_N_QUADROS = 4
 
-# Tempo gasto medindo a taxa antes de dimensionar a janela de análise.
-#
-# A janela é dimensionada em **amostras**, por `janela_s * fps`. Chutar 20 e
-# receber 12 faria a janela de dez segundos durar dezesseis, e a barra de
-# progresso mentir na mesma proporção. A análise em si não erra por isso, porque
-# ela reamostra pelos carimbos de tempo de verdade, mas o que a pessoa vê erra.
-SEGUNDOS_PARA_MEDIR_A_TAXA = 2.0
-
-
 def confianca_de(snr_db: float | None) -> str:
     """Os mesmos limiares da versão web, para as duas dizerem a mesma coisa."""
     if snr_db is None:
@@ -95,6 +85,22 @@ class Origem:
 
     camera: int | None = None
     janela: JanelaDaTela | None = None
+    area_relativa: tuple[float, float, float, float] | None = None
+
+    def __post_init__(self):
+        if self.area_relativa is not None:
+            x0, y0, x1, y1 = self.area_relativa
+            if not (0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1):
+                raise ValueError("A área do participante precisa estar dentro da janela.")
+
+    def recortar(self, quadro):
+        if self.area_relativa is None:
+            return quadro
+        altura, largura = quadro.shape[:2]
+        x0, y0, x1, y1 = self.area_relativa
+        a, b = int(x0 * largura), int(y0 * altura)
+        c, d = int(x1 * largura), int(y1 * altura)
+        return np.ascontiguousarray(quadro[b:max(b + 1, d), a:max(a + 1, c)])
 
     @property
     def descricao(self) -> str:
@@ -114,13 +120,21 @@ class LacoDeMedicao(QThread):
         self.origem = origem
         self.config = config or ConfiguracaoAnalise()
         self._rodando = False
+        self._parada = Event()
 
     def parar(self) -> None:
+        self._parada.set()
+        self.requestInterruption()
         self._rodando = False
 
     # ------------------------------------------------------------------ laço
     def run(self) -> None:  # noqa: N802  (nome da API do Qt)
+        if self._parada.is_set():
+            return
         self._rodando = True
+        if self._parada.is_set():
+            self._rodando = False
+            return
         try:
             if self.origem.janela is not None:
                 self._medir_janela()
@@ -130,6 +144,8 @@ class LacoDeMedicao(QThread):
             # Qualquer falha aqui precisa chegar à interface. Thread que morre
             # calada deixa o botão dizendo "ligado" com nada acontecendo.
             self.falhou.emit(str(erro))
+        finally:
+            self._rodando = False
 
     def _medir_camera(self) -> None:
         from cardiocam.fontes.webcam import abrir_webcam
@@ -139,15 +155,19 @@ class LacoDeMedicao(QThread):
             self.falhou.emit(str(abertura.erro))
             return
         fonte = abertura.desempacotar()
-        monitor = MonitorCardiaco(fps=fonte.fps, config=self.config)
-        juiz = JuizDeQualidade(self.config.amostras_por_janela(fonte.fps))
         try:
+            if not self._rodando:
+                return
+            monitor = MonitorCardiaco(fps=fonte.fps, config=self.config)
+            juiz = JuizDeQualidade(self.config.amostras_por_janela(fonte.fps), caminho_modelo=self.config.modelo_qualidade)
             for quadro, instante in fonte.quadros():
                 if not self._rodando:
                     break
                 estado = monitor.processar(quadro, instante)
                 juiz.registrar_quadro(quadro, estado)
                 self._publicar(estado, juiz)
+            if self._rodando:
+                self.falhou.emit("A câmera parou de fornecer quadros. Verifique a conexão.")
         finally:
             fonte.fechar()
 
@@ -164,22 +184,6 @@ class LacoDeMedicao(QThread):
             interpolation=cv2.INTER_AREA,
         )
 
-    def _medir_taxa(self, captura, regiao: dict[str, int]) -> float:
-        """Conta quadros por um instante, para dimensionar a janela de análise."""
-        quadros = 0
-        inicio = time.perf_counter()
-        while (
-            self._rodando
-            and time.perf_counter() - inicio < SEGUNDOS_PARA_MEDIR_A_TAXA
-        ):
-            bruto = np.asarray(captura.grab(regiao))
-            self._encolher(cv2.cvtColor(bruto, cv2.COLOR_BGRA2BGR))
-            quadros += 1
-        gasto = time.perf_counter() - inicio
-        if quadros < 3 or gasto <= 0:
-            return QUADROS_POR_SEGUNDO
-        return min(QUADROS_POR_SEGUNDO, max(5.0, quadros / gasto))
-
     def _medir_janela(self) -> None:
         import mss
 
@@ -189,10 +193,9 @@ class LacoDeMedicao(QThread):
         janela = self.origem.janela
         assert janela is not None
 
-        with mss.MSS() as captura:
-            taxa = self._medir_taxa(captura, janela.regiao)
-        if not self._rodando:
-            return
+        # A janela agora é temporal: o FPS nominal define apenas o alvo da
+        # captura, sem exigir uma medição que desconsidere o custo da análise.
+        taxa = QUADROS_POR_SEGUNDO
 
         monitor = MonitorCardiaco(
             fps=taxa,
@@ -201,12 +204,12 @@ class LacoDeMedicao(QThread):
                 DetectorHaar(), intervalo_deteccao=DETECCAO_A_CADA_N_QUADROS
             ),
         )
-        juiz = JuizDeQualidade(self.config.amostras_por_janela(taxa))
+        juiz = JuizDeQualidade(self.config.amostras_por_janela(taxa), caminho_modelo=self.config.modelo_qualidade)
         intervalo = 1.0 / taxa
         inicio = time.perf_counter()
         ultima_releitura = 0.0
 
-        with mss.MSS() as captura:
+        with criar_captura(mss) as captura:
             while self._rodando:
                 agora = time.perf_counter()
 
@@ -219,11 +222,14 @@ class LacoDeMedicao(QThread):
                         )
                         return
                     janela = atual
+                    if area_coberta(janela, self.origem.area_relativa):
+                        self.falhou.emit("A área selecionada está coberta por outra janela. Deixe o participante visível.")
+                        return
 
                 bruto = np.asarray(captura.grab(janela.regiao))
                 # O mss entrega BGRA; o pipeline inteiro trabalha em BGR. A
                 # conversão descarta só o canal alfa, que é constante.
-                quadro = self._encolher(cv2.cvtColor(bruto, cv2.COLOR_BGRA2BGR))
+                quadro = self._encolher(self.origem.recortar(cv2.cvtColor(bruto, cv2.COLOR_BGRA2BGR)))
                 estado = monitor.processar(quadro, agora - inicio)
                 juiz.registrar_quadro(quadro, estado)
                 self._publicar(estado, juiz)
@@ -236,7 +242,7 @@ class LacoDeMedicao(QThread):
     def _publicar(self, estado, juiz: JuizDeQualidade) -> None:
         analise = monitor_analise(estado)
         snr = analise.estimativa.snr_db if analise is not None else None
-        veredito = juiz.julgar(analise)
+        veredito = aplicar_veredito(juiz, estado)
         # `analise.pulso` é um `SinalPulso`, não uma lista: o sinal mora em
         # `.amostras`. Fatiar o objeto direto levantava `not subscriptable` e
         # derrubava a thread **na primeira janela emitida**, que é o pior
@@ -258,13 +264,11 @@ class LacoDeMedicao(QThread):
                 confianca="descartada" if recusado else confianca_de(snr),
                 snr_db=snr,
                 progresso=estado.progresso,
-                mensagem=(
-                    f"Recusada pelo modelo de qualidade ({veredito.texto})."
-                    if recusado
-                    else estado.mensagem
-                ),
+                mensagem=estado.mensagem,
                 pulso=pulso,
                 qualidade=None if veredito is None else veredito.probabilidade,
+                instante_analise=estado.instante_analise,
+                idade_analise_s=estado.idade_analise_s,
             )
         )
 

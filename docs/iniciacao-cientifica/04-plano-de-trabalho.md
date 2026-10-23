@@ -108,9 +108,10 @@ se houver viés, não recupera e o erro fica.
 
 ### 5. Submissão ao comitê de ética (meses 1 e 2)
 
-Cadastro na Plataforma Brasil, preenchimento dos formulários, anexo do projeto e
-do TCLE, folha de rosto assinada. Submissão com a antecedência de 30 dias que a
-norma exige. Ver [Ética e Plataforma Brasil](06-etica-plataforma-brasil.md).
+Confirmar o sistema institucional, preencher formulários e anexar projeto,
+TCLE e documentos exigidos. A antecedência depende do calendário do CEP;
+não foi confirmada uma regra nacional de 30 dias antes da reunião.
+Ver [Revisão ética](06-etica-plataforma-brasil.md).
 
 ### 6. Obtenção e preparo dos dados públicos (meses 3 e 4)
 

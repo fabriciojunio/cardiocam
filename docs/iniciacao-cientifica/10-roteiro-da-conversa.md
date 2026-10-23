@@ -46,10 +46,10 @@ informação sobre você, não sobre o projeto.
 
 É o risco que ele vai pensar primeiro, porque é o que mais mata IC.
 
-> "As duas primeiras fases são simulação e dados públicos, então não dependem de
-> parecer e começam no mês 1. A coleta com pessoas entra no mês 7, já com
-> parecer. Se o comitê atrasar ou se a coleta não acontecer, o projeto ainda tem
-> resultado publicável."
+> "Podemos iniciar simulações sem dados pessoais enquanto preparamos a submissão.
+> Antes de usar bases de terceiros, precisamos conferir licença e enquadramento
+> ético. A coleta local só começa após aprovação; o mês 7 é uma estimativa.
+> O potencial de publicação depende dos resultados e da avaliação científica."
 
 ### 3. Que o número bonito do seu sistema é suspeito
 

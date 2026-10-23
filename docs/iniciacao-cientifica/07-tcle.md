@@ -2,17 +2,17 @@
 
 > **Instruções de preenchimento, a apagar antes de imprimir.**
 >
-> Os campos entre chaves `{...}` são os únicos a completar, e todos dependem de
-> dados institucionais que o orientador tem. O texto corrido **não deve ser
-> reescrito**: ele segue a estrutura e a linguagem que a Resolução CNS 466/2012
-> exige, inclusive na ordem dos itens.
+> **Minuta para revisão pelo orientador e pelo CEP.** Completar os campos entre
+> chaves `{...}` e revisar o texto conforme o protocolo e as normas vigentes.
+> A ordem e a redação não foram certificadas como exigência normativa.
+> Consultar o [roteiro de revisão ética](06-etica-plataforma-brasil.md).
 >
 > Imprimir em **duas vias**, ambas rubricadas em todas as páginas e assinadas na
 > última. Uma via fica com o participante, a outra com o pesquisador
 > responsável. Entregar a via do participante **no ato**, não depois.
 >
-> A versão final é a que sobe na Plataforma Brasil; o comitê pode pedir ajuste de
-> redação, e nesse caso vale a redação que o comitê aprovar.
+> Submeter pelo sistema indicado pela instituição. Usar com participantes
+> somente a versão aprovada e confirmar a forma de registro do consentimento.
 
 ---
 
@@ -30,8 +30,8 @@ Ciência da Computação no Centro Universitário Sagrado Coração (UNISAGRADO)
 Bauru
 
 **Comitê de Ética em Pesquisa:** {nome, endereço, telefone e e-mail do CEP}
-**CONEP:** Comissão Nacional de Ética em Pesquisa, SRTVN 701, via W5 Norte,
-lote D, Edifício PO700, 3º andar, Brasília, DF, CEP 70719-040
+**Instância nacional, quando aplicável:** {identificação e contatos vigentes}
+Confirmar com a instituição antes da submissão.
 
 ---
 
