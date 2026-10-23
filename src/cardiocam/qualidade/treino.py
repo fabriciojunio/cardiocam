@@ -88,6 +88,8 @@ class ModeloDeQualidade:
     não apenas uma posição na ordenação.
     """
 
+    calibracao_viavel: bool = True
+
     def probabilidade(self, caracteristicas: Caracteristicas) -> float:
         """Chance de esta janela estar dentro da tolerância, já calibrada."""
         bruta = caracteristicas.vetor().reshape(1, -1)
@@ -96,7 +98,7 @@ class ModeloDeQualidade:
 
     def aceita(self, caracteristicas: Caracteristicas) -> bool:
         """A decisão de responder ou recusar."""
-        return self.probabilidade(caracteristicas) >= self.limiar
+        return self.calibracao_viavel and self.probabilidade(caracteristicas) >= self.limiar
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +190,7 @@ def treinar(
     cobertura_minima: float = 0.5,
     erro_alvo_bpm: float = 2.0,
     semente: int = 0,
+    particao: Particao | None = None,
 ) -> RelatorioDeTreino:
     """Treina, calibra, escolhe o limiar e mede no teste, nessa ordem.
 
@@ -195,10 +198,9 @@ def treinar(
     assinatura porque são decisão de quem opera, não do modelo: um demonstrador
     quer responder quase sempre, uma medição de pesquisa prefere recusar.
 
-    Quando nenhum limiar atinge os dois ao mesmo tempo, o modelo adota 0,0, que
-    é responder sempre, e o relatório mostra isso de forma explícita na curva.
-    É melhor do que inventar um limiar que não atende ao que foi pedido: o
-    próprio fato de não existir limiar viável é um resultado.
+    Quando nenhum limiar atinge os dois ao mesmo tempo, a calibração é marcada
+    como inviável e o modelo recusa as leituras. A ausência de limiar viável
+    aparece no relatório, em vez de ser interpretada como permissão para aceitar.
     """
     if len(amostras) < 10:
         raise ValueError(
@@ -212,7 +214,15 @@ def treinar(
     erros = np.array([abs(a.erro_bpm) for a in amostras])
     grupos = [a.grupo for a in amostras]
 
-    particao = particionar(grupos, semente=semente)
+    particao = particao if particao is not None else particionar(grupos, semente=semente)
+    partes = (particao.treino, particao.calibracao, particao.teste)
+    indices = np.concatenate(partes)
+    if (indices.dtype.kind not in "iu" or len(indices) != len(amostras)
+            or not np.array_equal(np.sort(indices), np.arange(len(amostras)))):
+        raise ValueError("A partição deve conter cada amostra exatamente uma vez.")
+    grupos_partes = [set(grupos[int(i)] for i in parte) for parte in partes]
+    if any(grupos_partes[i] & grupos_partes[j] for i in range(3) for j in range(i+1, 3)):
+        raise ValueError("Um participante aparece em mais de uma partição.")
     if particao.treino.size == 0 or particao.teste.size == 0:
         raise ValueError("A partição deixou treino ou teste vazios.")
 
@@ -255,7 +265,8 @@ def treinar(
             cobertura_minima=cobertura_minima,
             erro_alvo_bpm=erro_alvo_bpm,
         )
-    limiar = 0.0 if limiar is None else limiar
+    calibracao_viavel = limiar is not None
+    limiar = 1.0 if limiar is None else limiar
 
     probabilidades_teste = prever(particao.teste)
     modelo = ModeloDeQualidade(
@@ -264,6 +275,7 @@ def treinar(
         limiar=limiar,
         tolerancia_bpm=tolerancia_bpm,
         temperatura=temperatura,
+        calibracao_viavel=calibracao_viavel,
     )
 
     return RelatorioDeTreino(
@@ -275,7 +287,8 @@ def treinar(
             probabilidades_teste, erros[particao.teste]
         ),
         ponto_adotado=abstencao.avaliar(
-            probabilidades_teste, erros[particao.teste], limiar
+            probabilidades_teste, erros[particao.teste],
+            limiar if calibracao_viavel else float("inf"),
         ),
         quantidade_treino=int(particao.treino.size),
         quantidade_calibracao=int(particao.calibracao.size),

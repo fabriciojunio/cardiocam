@@ -145,8 +145,8 @@ cardíaca por câmera: um estudo comparativo de métodos cromáticos
 Nós, abaixo assinados, pesquisadores envolvidos no projeto acima, declaramos e
 nos comprometemos a:
 
-1. cumprir integralmente a Resolução CNS nº 466/2012 e as demais normas do
-   sistema CEP/CONEP aplicáveis;
+1. cumprir o protocolo aprovado e as normas de ética em pesquisa aplicáveis,
+   considerando a Lei 14.874/2024, sua regulamentação e as orientações do CEP;
 2. **iniciar a coleta de dados com participantes somente após a aprovação** do
    Comitê de Ética em Pesquisa, e jamais antes;
 3. submeter ao comitê qualquer alteração de protocolo, por meio de emenda, antes

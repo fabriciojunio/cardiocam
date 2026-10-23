@@ -18,6 +18,7 @@ o teste mais importante aqui é o que corrompe os nomes de propósito.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -70,6 +71,13 @@ def _procedencia() -> Procedencia:
 
 
 class TestIdaEVolta:
+    def test_calibracao_inviavel_continua_recusando_apos_carregar(self, tmp_path):
+        modelo = replace(_modelo(), calibracao_viavel=False)
+        lido, _ = carregar(salvar(modelo, _procedencia(), tmp_path / "inviavel.json"))
+        assert not lido.calibracao_viavel
+        valores = dict.fromkeys(Caracteristicas.nomes(), 0.0)
+        assert not lido.aceita(Caracteristicas(**valores))
+
     def test_a_probabilidade_sobrevive_ao_arquivo(self, tmp_path):
         """O que importa não é o arquivo bater campo a campo: é o modelo lido
         decidir **a mesma coisa** que o gravado, sobre a mesma janela."""

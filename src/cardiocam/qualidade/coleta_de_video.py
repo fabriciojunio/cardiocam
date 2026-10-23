@@ -32,7 +32,7 @@ from cardiocam.avaliacao.benchmark import Cenario, cenarios_de_robustez
 from cardiocam.dominio.config import ConfiguracaoAnalise
 from cardiocam.fontes.sintetica import FonteSintetica
 from cardiocam.pipeline.analisador import MonitorCardiaco
-from cardiocam.qualidade.caracteristicas import extrair
+from cardiocam.qualidade.extracao import caracteristicas_da_analise
 from cardiocam.qualidade.treino import Amostra
 from cardiocam.rppg import ALGORITMOS_DISPONIVEIS, criar_algoritmo
 
@@ -62,14 +62,33 @@ class ContextoDaJanela:
     capacidade: int
 
     def __post_init__(self) -> None:
-        self.pele: deque[float] = deque(maxlen=self.capacidade)
-        self.saturacao: deque[float] = deque(maxlen=self.capacidade)
-        self.centro_x: deque[float] = deque(maxlen=self.capacidade)
+        self.pele: deque[float] = deque()
+        self.saturacao: deque[float] = deque()
+        self.centro_x: deque[float] = deque()
+        self.instantes: deque[float | None] = deque()
 
-    def registrar(self, proporcao_pele: float, saturada: float, centro: float) -> None:
+    def registrar(self, proporcao_pele: float, saturada: float, centro: float,
+                  instante: float | None = None, inicio: float | None = None) -> None:
         self.pele.append(float(proporcao_pele))
         self.saturacao.append(float(saturada))
         self.centro_x.append(float(centro))
+        self.instantes.append(instante)
+        if inicio is None:
+            while len(self.pele) > self.capacidade:
+                self._remover_primeiro()
+        else:
+            while self.instantes and (self.instantes[0] is None or self.instantes[0] < inicio - 1e-8):
+                self._remover_primeiro()
+
+    def _remover_primeiro(self) -> None:
+        for buffer in (self.pele, self.saturacao, self.centro_x, self.instantes):
+            buffer.popleft()
+
+    def limpar(self) -> None:
+        self.pele.clear()
+        self.saturacao.clear()
+        self.centro_x.clear()
+        self.instantes.clear()
 
     @property
     def completo(self) -> bool:
@@ -148,32 +167,28 @@ def coletar_de_video(
 
             for quadro, instante in fonte.quadros():
                 estado = monitor.processar(quadro, instante)
+                if estado.contexto_reiniciado:
+                    contexto.limpar()
                 if estado.amostra is not None and estado.caixa is not None:
                     contexto.registrar(
                         estado.amostra.proporcao_pele,
-                        fracao_saturada(quadro, estado.caixa),
+                        (estado.amostra.fracao_saturada if estado.amostra.fracao_saturada is not None
+                         else fracao_saturada(quadro, estado.caixa)),
                         (estado.caixa.x + estado.caixa.largura / 2.0)
                         / max(1, quadro.shape[1]),
+                        instante=instante, inicio=estado.inicio_janela,
                     )
 
-                if len(monitor.historico) <= emitidas:
+                if monitor.total_estimativas <= emitidas:
                     continue
-                emitidas = len(monitor.historico)
+                emitidas = monitor.total_estimativas
                 analise = monitor.ultima_analise
                 if analise is None:
                     continue
 
                 amostras.append(
                     Amostra(
-                        caracteristicas=extrair(
-                            pulso=analise.pulso,
-                            espectro=analise.espectro,
-                            frequencia_hz=analise.estimativa.frequencia_hz,
-                            snr_db=analise.estimativa.snr_db,
-                            fracao_de_pele=contexto.media_de_pele(),
-                            fracao_saturada=contexto.media_saturada(),
-                            posicoes_roi=contexto.deslocamento(),
-                        ),
+                        caracteristicas=caracteristicas_da_analise(analise, contexto=contexto),
                         erro_bpm=float(
                             abs(analise.estimativa.bpm - cenario.bpm_verdadeiro)
                         ),

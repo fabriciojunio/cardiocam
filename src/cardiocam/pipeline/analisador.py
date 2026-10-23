@@ -13,7 +13,8 @@ processamento de sinais, e a média RGB é a fronteira entre os dois mundos.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from collections import deque
 
 import numpy as np
 
@@ -36,6 +37,7 @@ from cardiocam.visao.detector_face import DetectorFace, DetectorHaar
 from cardiocam.visao.extrator import AmostraQuadro, ExtratorRGB
 from cardiocam.visao.geometria import Retangulo
 from cardiocam.visao.rastreador import RastreadorRosto
+from cardiocam.visao.continuidade import VigilanteDeQuadros
 
 
 def _rectificar_pelo_fundo(serie: SerieRGB) -> SerieRGB:
@@ -65,6 +67,8 @@ class AnaliseCompleta:
     espectro: Espectro
     hrv: VariabilidadeCardiaca
     bpm_por_picos: float
+    serie: SerieRGB | None = None
+    instantes_originais: np.ndarray | None = None
 
     @property
     def concordancia_bpm(self) -> float:
@@ -87,6 +91,7 @@ def estimar_de_serie(
     """
     config = config or ConfiguracaoAnalise()
     algoritmo = algoritmo or criar_algoritmo(config.algoritmo)
+    serie_original = serie
 
     # Rectificação por referência de fundo, aplicada canal a canal antes do
     # algoritmo. A ordem importa: o balanço de branco automático age sobre cada
@@ -141,6 +146,8 @@ def estimar_de_serie(
             bpm_por_picos=_bpm_por_picos(
                 pulso, config.banda, frequencia_esperada_hz=analise.frequencia_hz
             ),
+            serie=serie_original,
+            instantes_originais=serie_original.instantes,
         )
     )
 
@@ -156,6 +163,22 @@ class EstadoQuadro:
     mensagem: str = ""
     progresso: float = 0.0
     """Fração da janela já preenchida, de 0 a 1."""
+    instante: float | None = None
+    instante_analise: float | None = None
+    nova_analise: bool = False
+    contexto_reiniciado: bool = False
+    codigo_falha: str | None = None
+    inicio_janela: float | None = None
+    janela_emitida: bool = False
+    qualidade: float | None = None
+    recusada: bool = False
+    caracteristicas_ausentes: tuple[str, ...] = ()
+
+    @property
+    def idade_analise_s(self) -> float | None:
+        if self.instante is None or self.instante_analise is None:
+            return None
+        return max(0.0, self.instante - self.instante_analise)
 
     @property
     def tem_rosto(self) -> bool:
@@ -178,6 +201,8 @@ class MonitorCardiaco:
         extrator: ExtratorRGB | None = None,
         rastreador: RastreadorRosto | None = None,
         algoritmo: AlgoritmoRPPG | None = None,
+        detectar_congelamento: bool = True,
+        limite_historico: int | None = 3600,
     ) -> None:
         self.config = config or ConfiguracaoAnalise()
         self.algoritmo = algoritmo or criar_algoritmo(self.config.algoritmo)
@@ -193,8 +218,14 @@ class MonitorCardiaco:
 
         self._bpm_suavizado: float | None = None
         self._ultima_analise: AnaliseCompleta | None = None
-        self._historico: list[EstimativaBPM] = []
+        if limite_historico is not None and limite_historico < 1:
+            raise ValueError("O limite do histórico precisa ser positivo.")
+        self._historico: deque[EstimativaBPM] = deque(maxlen=limite_historico)
+        self._total_estimativas = 0
         self._quadros_processados = 0
+        self._instante_analise: float | None = None
+        self._ultimo_instante: float | None = None
+        self._vigilante = VigilanteDeQuadros() if detectar_congelamento else None
 
     @property
     def bpm_atual(self) -> float | None:
@@ -211,6 +242,10 @@ class MonitorCardiaco:
     @property
     def quadros_processados(self) -> int:
         return self._quadros_processados
+
+    @property
+    def total_estimativas(self) -> int:
+        return self._total_estimativas
 
     def _suavizar(self, bpm: float) -> float:
         """Média exponencial do BPM exibido.
@@ -231,28 +266,94 @@ class MonitorCardiaco:
         self.janela.limpar()
         self.rastreador.reiniciar()
         self.extrator.reiniciar()
+        self._invalidar_leitura()
+        self._ultimo_instante = None
+        if self._vigilante is not None:
+            self._vigilante.reiniciar()
+
+    def _invalidar_leitura(self) -> None:
         self._bpm_suavizado = None
         self._ultima_analise = None
+        self._instante_analise = None
 
     def processar(self, quadro: np.ndarray, instante: float) -> EstadoQuadro:
         """Consome um quadro e devolve o estado atualizado."""
         self._quadros_processados += 1
-        estado = EstadoQuadro(bpm_exibido=self._bpm_suavizado)
+        estado = EstadoQuadro(instante=instante)
+        if not np.isfinite(instante):
+            self.reiniciar()
+            estado.contexto_reiniciado = True
+            estado.codigo_falha = "tempo_invalido"
+            estado.mensagem = "O quadro não possui um instante válido."
+            return estado
+        limite_pausa = max(1.0, 2.0 * self.config.passo_s)
+        if self._ultimo_instante is not None:
+            intervalo = instante - self._ultimo_instante
+            if intervalo == 0:
+                # Um quadro duplicado é descartado, sem perder os segundos de
+                # sinal válido já coletados. Não inventamos um instante novo.
+                self._invalidar_leitura()
+                estado.codigo_falha = "tempo_nao_monotonico"
+                estado.mensagem = "O instante do quadro foi repetido. Quadro descartado."
+                return estado
+            if intervalo < 0:
+                self.reiniciar()
+                estado.contexto_reiniciado = True
+                estado.codigo_falha = "tempo_nao_monotonico"
+                estado.mensagem = "O instante do quadro foi repetido ou retrocedeu."
+                return estado
+            if intervalo > limite_pausa:
+                self.reiniciar()
+                estado.contexto_reiniciado = True
+        self._ultimo_instante = instante
+        if quadro is None or quadro.size == 0 or quadro.ndim != 3 or quadro.shape[2] != 3:
+            self.reiniciar()
+            estado.contexto_reiniciado = True
+            estado.codigo_falha = "quadro_invalido"
+            estado.mensagem = "O quadro precisa ser uma imagem BGR válida."
+            return estado
+        if self._vigilante is not None and self._vigilante.congelado(quadro, instante):
+            self.janela.limpar()
+            self.extrator.reiniciar()
+            self._invalidar_leitura()
+            estado.contexto_reiniciado = True
+            estado.codigo_falha = "video_congelado"
+            estado.mensagem = "O vídeo está congelado. Aguardando novos quadros."
+            return estado
+        if (self._instante_analise is not None
+                and instante - self._instante_analise > limite_pausa):
+            self._invalidar_leitura()
+        estado.bpm_exibido = self._bpm_suavizado
+        estado.instante_analise = self._instante_analise
 
         deteccao = self.rastreador.atualizar(quadro)
         if deteccao.falhou:
-            if self.rastreador.perdeu_o_rosto and len(self.janela):
+            if self.rastreador.perdeu_o_rosto:
                 self.janela.limpar()
-                self._bpm_suavizado = None
-                self._ultima_analise = None
-                estado.bpm_exibido = None
+                self.extrator.reiniciar()
+                self._invalidar_leitura()
+                estado.contexto_reiniciado = True
+            estado.bpm_exibido = None
+            estado.instante_analise = None
+            estado.codigo_falha = "rosto_nao_encontrado"
             estado.mensagem = "Rosto não encontrado. Olhe para a câmera."
             return estado
 
         estado.caixa = deteccao.desempacotar()
+        if getattr(self.rastreador, "contexto_alterado", False):
+            self.janela.limpar()
+            self.extrator.reiniciar()
+            self._invalidar_leitura()
+            estado.bpm_exibido = None
+            estado.instante_analise = None
+            estado.contexto_reiniciado = True
 
         extracao = self.extrator.extrair(quadro, estado.caixa)
         if extracao.falhou:
+            self._invalidar_leitura()
+            estado.bpm_exibido = None
+            estado.instante_analise = None
+            estado.codigo_falha = extracao.erro.codigo
             estado.mensagem = str(extracao.erro)
             return estado
 
@@ -261,12 +362,12 @@ class MonitorCardiaco:
         self.janela.adicionar(
             amostra.vermelho, amostra.verde, amostra.azul, instante, amostra.fundo
         )
-        estado.progresso = min(1.0, len(self.janela) / self.janela.capacidade)
+        estado.progresso = self.janela.progresso
+        estado.inicio_janela = self.janela.inicio
 
         if not self.janela.deve_emitir():
             if not self.janela.cheia:
-                faltam = self.janela.capacidade - len(self.janela)
-                segundos = faltam / max(1e-6, self.janela.fps_efetivo())
+                segundos = max(0.0, self.config.janela_s - self.janela.duracao_s)
                 estado.mensagem = f"Coletando sinal, faltam {segundos:.0f} s."
             else:
                 estado.mensagem = "Medindo."
@@ -274,17 +375,28 @@ class MonitorCardiaco:
             return estado
 
         self.janela.marcar_emissao()
+        estado.janela_emitida = True
         resultado = estimar_de_serie(self.janela.serie(), self.config, self.algoritmo)
 
         if resultado.falhou:
-            estado.mensagem = "Sinal fraco. Fique parado e melhore a iluminação."
-            estado.analise = self._ultima_analise
+            self._invalidar_leitura()
+            estado.bpm_exibido = None
+            estado.instante_analise = None
+            estado.codigo_falha = resultado.erro.codigo
+            estado.mensagem = str(resultado.erro)
             return estado
 
-        analise = resultado.desempacotar()
+        analise = replace(
+            resultado.desempacotar(),
+            instantes_originais=self.janela.serie(uniformizar=False).instantes,
+        )
         self._ultima_analise = analise
+        self._instante_analise = instante
         self._historico.append(analise.estimativa)
+        self._total_estimativas += 1
         estado.analise = analise
+        estado.instante_analise = instante
+        estado.nova_analise = True
         estado.bpm_exibido = self._suavizar(analise.estimativa.bpm)
         estado.mensagem = f"Confiança {analise.estimativa.confianca.value}."
         return estado
@@ -298,6 +410,8 @@ class RelatorioSessao:
     quadros_processados: int = 0
     quadros_com_rosto: int = 0
     ultima_analise: AnaliseCompleta | None = None
+    registros: list = field(default_factory=list)
+    historico_limitado: bool = False
 
     @property
     def total_estimativas(self) -> int:
@@ -367,13 +481,24 @@ def analisar_fonte(
         extrator=extrator,
         rastreador=rastreador,
         algoritmo=algoritmo,
+        limite_historico=None,
     )
 
     relatorio = RelatorioSessao()
+    from cardiocam.pipeline.registros import RegistroMedicao
+    from cardiocam.desktop.qualidade_ao_vivo import JuizDeQualidade, aplicar_qualidade
+    juiz = JuizDeQualidade(monitor.janela.capacidade, caminho_modelo=config.modelo_qualidade)
     for indice, (quadro, instante) in enumerate(fonte.quadros()):
         if limite_quadros is not None and indice >= limite_quadros:
             break
         estado = monitor.processar(quadro, instante)
+        aplicar_qualidade(juiz, quadro, estado)
+        if estado.janela_emitida or estado.codigo_falha is not None:
+            # Evita repetir um mesmo erro a cada quadro; janelas emitidas
+            # continuam entrando individualmente, mesmo quando falham.
+            if (estado.janela_emitida or not relatorio.registros
+                    or relatorio.registros[-1].codigo_falha != estado.codigo_falha):
+                relatorio.registros.append(RegistroMedicao.do_estado(estado))
         relatorio.quadros_processados += 1
         if estado.tem_rosto:
             relatorio.quadros_com_rosto += 1

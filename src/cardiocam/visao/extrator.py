@@ -36,6 +36,10 @@ class AmostraQuadro:
     regioes: tuple[Retangulo, ...] = ()
     fundo: tuple[float, float, float] | None = None
     """Média RGB do fundo neste quadro, quando houve fundo utilizável."""
+    luminancia_p05: float | None = None
+    luminancia_mediana: float | None = None
+    luminancia_p95: float | None = None
+    fracao_saturada: float | None = None
 
     def como_vetor(self) -> np.ndarray:
         return np.array([self.vermelho, self.verde, self.azul], dtype=float)
@@ -89,12 +93,15 @@ class ExtratorRGB:
             except RuntimeError:  # pragma: sem cobertura
                 self._detector_olhos = None
         self._olhos: Olhos | None = None
+        self._caixa_dos_olhos: Retangulo | None = None
         self.usou_olhos = False
 
     def reiniciar(self) -> None:
         """Esquece as seleções memorizadas. Chamado quando o rosto se perde."""
         self._selecoes.clear()
         self._olhos = None
+        self._caixa_dos_olhos = None
+        self.usou_olhos = False
         self._contador = 0
 
     def _regioes_para(
@@ -104,8 +111,7 @@ class ExtratorRGB:
 
         A posição dos olhos é redetectada de tempos em tempos, e não a cada
         quadro, por dois motivos: custa caro e oscila. Entre uma detecção e
-        outra, as regiões ficam paradas, o que também ajuda a média a ser sempre
-        sobre os mesmos pixels.
+        outra, as coordenadas acompanham a translação e a escala da caixa.
         """
         altura, largura = quadro.shape[:2]
 
@@ -116,10 +122,21 @@ class ExtratorRGB:
         if pode_ancorar and self._detector_olhos is not None:
             if self._olhos is None or self._contador % (self.intervalo_mascara * 2) == 0:
                 encontrados = self._detector_olhos.detectar(quadro, caixa_rosto)
-                if encontrados is not None:
-                    self._olhos = encontrados
+                self._olhos = encontrados
+                self._caixa_dos_olhos = caixa_rosto if encontrados is not None else None
             if self._olhos is not None:
-                regioes = regioes_ancoradas(self._olhos, largura, altura)
+                origem = self._caixa_dos_olhos
+                assert origem is not None
+
+                def transportar(ponto):
+                    x, y = ponto
+                    return (
+                        caixa_rosto.x + (x - origem.x) * caixa_rosto.largura / max(1, origem.largura),
+                        caixa_rosto.y + (y - origem.y) * caixa_rosto.altura / max(1, origem.altura),
+                    )
+
+                atuais = Olhos(transportar(self._olhos.esquerdo), transportar(self._olhos.direito))
+                regioes = regioes_ancoradas(atuais, largura, altura)
                 if len(regioes) == 3:
                     self.usou_olhos = True
                     return regioes
@@ -229,13 +246,13 @@ class ExtratorRGB:
             if recorte.size == 0:
                 continue
             area_total += recorte.shape[0] * recorte.shape[1]
+            pixels_pele += int(np.count_nonzero(mascara_pele(recorte)))
             selecao = self._selecao_estavel(recorte, indice)
             if selecao is None:
                 continue
             selecionados = recorte.reshape(-1, 3).astype(float)[selecao]
             if selecionados.shape[0] > 0:
                 acumulado.append(selecionados)
-                pixels_pele += selecionados.shape[0]
         self._contador += 1
 
         if not acumulado:
@@ -253,6 +270,8 @@ class ExtratorRGB:
             )
 
         azul, verde, vermelho = pixels.mean(axis=0)
+        luminancia = pixels @ np.array([0.114, 0.587, 0.299])
+        p05, mediana, p95 = np.percentile(luminancia, [5, 50, 95])
         fundo = media_do_fundo(quadro, caixa_rosto) if self.medir_fundo else None
         return Ok(
             AmostraQuadro(
@@ -263,5 +282,9 @@ class ExtratorRGB:
                 proporcao_pele=float(pixels_pele / area_total) if area_total else 0.0,
                 regioes=tuple(regioes),
                 fundo=fundo,
+                luminancia_p05=float(p05),
+                luminancia_mediana=float(mediana),
+                luminancia_p95=float(p95),
+                fracao_saturada=float(np.mean(np.any((pixels <= 1) | (pixels >= 254), axis=1))),
             )
         )
